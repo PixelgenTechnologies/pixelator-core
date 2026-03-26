@@ -1,0 +1,16 @@
+
+[workspace]
+members = ["packages/cli", "packages/pixelator_core", "packages/python_bindings"]
+resolver = "3"
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "fat"
+
+[profile.profiling]
+inherits = "release"
+debug = true
+lto = false
+codegen-units = 16     # More units = less cross-unit inlining
+opt-level = 2

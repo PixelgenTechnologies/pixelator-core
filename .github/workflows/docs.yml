@@ -1,0 +1,57 @@
+name: docs
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          lfs: true
+
+      - name: setup caching
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: build rust docs
+        env:
+          # Keep CI green if rustdoc warnings are introduced by rustc/rustdoc changes.
+          RUSTDOCFLAGS: ""
+        run: cargo doc --workspace --no-deps
+
+      - name: add docs landing page
+        run: |
+          set -euo pipefail
+          mkdir -p target/doc
+          cat > target/doc/index.html <<'EOF'
+          <!doctype html>
+          <meta charset="utf-8" />
+          <meta http-equiv="refresh" content="0; url=pixelator_core/index.html" />
+          <title>pixelator-core docs</title>
+          <p>Redirecting to <a href="pixelator_core/index.html">pixelator-core</a>...</p>
+          EOF
+
+      - name: deploy docs to gh-page
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          branch: gh-page
+          folder: target/doc
+          target-folder: dev/docs
+          clean: false
+

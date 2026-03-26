@@ -1,0 +1,17 @@
+[package]
+name = "community-detection"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.5.48", features = ["derive"] }
+rand = "0.9.2"
+indicatif = "0.18.0"
+pixelator-core = { path = "../pixelator_core" }
+env_logger = "0.11.8"
+log = "0.4.28"
+mimalloc = "0.1.48"
+
+[features]
+default = []
+experimental = []
