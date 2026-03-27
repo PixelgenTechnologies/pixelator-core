@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["algorithm","quality","weighted_partitioned_graph"]};

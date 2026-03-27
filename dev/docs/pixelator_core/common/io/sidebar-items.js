@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["create_graph_and_umi_mapping_from_parquet_file","filter_out_crossing_edges_from_edge_list","write_node_partitions_to_parquet","write_record_batches_to_path"],"struct":["ParquetUMIPairIter"]};

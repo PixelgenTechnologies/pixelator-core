@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["edges_from_tuples"],"struct":["Edge"],"trait":["EdgeWeight"],"type":["NodeIdx","PartitionId","UMI","UMIPair"]};

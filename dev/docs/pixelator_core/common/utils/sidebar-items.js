@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["mode_via_sort"],"struct":["NodeQueue"]};
