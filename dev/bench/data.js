@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774966295658,
+  "lastUpdate": 1774966856525,
   "repoUrl": "https://github.com/PixelgenTechnologies/pixelator-core",
   "entries": {
     "Native Community Detection Benchmark": [
@@ -269,6 +269,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "bench_parquet_writing",
             "value": 0.9032000000000001,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "adrien.coulier@pixelgen.com",
+            "name": "Adrien Coulier",
+            "username": "Aratz"
+          },
+          "committer": {
+            "email": "adrien.coulier@pixelgen.com",
+            "name": "Adrien Coulier",
+            "username": "Aratz"
+          },
+          "distinct": true,
+          "id": "3d8fad729ea33c3c405214b19fa420b235bb1092",
+          "message": "Fix package and module names",
+          "timestamp": "2026-03-31T16:05:34+02:00",
+          "tree_id": "0e11a5de91134660df7071adb5b4a9fd30312bc1",
+          "url": "https://github.com/PixelgenTechnologies/pixelator-core/commit/3d8fad729ea33c3c405214b19fa420b235bb1092"
+        },
+        "date": 1774966851820,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "bench_fast_label_propagation",
+            "value": 0.006287,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity",
+            "value": 0.026940000000000002,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity_medium",
+            "value": 14.13,
+            "unit": "s"
+          },
+          {
+            "name": "bench_create_graph_from_parquet",
+            "value": 1.688,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_reading",
+            "value": 0.4021,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_writing",
+            "value": 1.243,
             "unit": "s"
           }
         ]
