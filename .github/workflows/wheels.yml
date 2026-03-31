@@ -147,14 +147,14 @@ jobs:
           files: ./artifacts/*.whl
 
   publish-pypi:
-    name: publish wheels to PyPI
+    name: publish wheels to TestPyPI
     if: github.event_name == 'release'
     needs: build
     runs-on: ubuntu-latest
     permissions:
       id-token: write
     environment:
-      name: pypi
+      name: testpypi
     steps:
       - name: Download wheel artifacts
         uses: actions/download-artifact@v5
@@ -162,7 +162,8 @@ jobs:
           path: ./artifacts
           merge-multiple: true
 
-      - name: Publish to PyPI
+      - name: Publish to TestPyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
+          repository-url: https://test.pypi.org/legacy/
           packages-dir: ./artifacts
