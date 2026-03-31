@@ -50,7 +50,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [linux, macos, windows]
+        os: [linux, macos]
         target: [undefined]
         manylinux: [auto]
         include:
