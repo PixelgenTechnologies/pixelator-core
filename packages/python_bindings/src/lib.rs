@@ -45,8 +45,9 @@ mod pixelator_core_py {
     use super::run_hybrid_community_detection;
 
     #[pymodule_init]
-    fn init(_m: &Bound<'_, PyModule>) -> PyResult<()> {
+    fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
         pyo3_log::init();
+        m.add("__version__", env!("CARGO_PKG_VERSION"))?;
         Ok(())
     }
 }
