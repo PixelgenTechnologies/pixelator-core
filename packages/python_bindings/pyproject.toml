@@ -6,6 +6,9 @@ description = "Python bindings for performance critical parts of pixelator"
 readme = "README.md"
 dependencies = []
 
+[tool.maturin]
+module-name = "pixelator_core"
+
 [build-system]
 requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"

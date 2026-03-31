@@ -28,7 +28,7 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-#[pymodule(name = "pixelator_core_py")]
+#[pymodule(name = "pixelator_core")]
 mod pixelator_core_py {
     use pyo3::prelude::*;
 
