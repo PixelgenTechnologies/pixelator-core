@@ -15,6 +15,7 @@ concurrency:
 
 jobs:
   format:
+    name: Check Format and Clippy
     runs-on: ubuntu-latest
 
     steps:

@@ -19,6 +19,7 @@ concurrency:
 
 jobs:
   benchmark:
+    name: Benchmarks (cargo bench)
     runs-on: ubuntu-latest
 
     steps:

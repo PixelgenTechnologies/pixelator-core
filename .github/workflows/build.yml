@@ -15,6 +15,7 @@ concurrency:
 
 jobs:
   build:
+    name: Cargo build (pixelator-core, cli, python bindings)
     runs-on: ubuntu-latest
 
     steps:
