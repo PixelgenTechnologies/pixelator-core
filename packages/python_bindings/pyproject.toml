@@ -6,6 +6,9 @@ description = "Python bindings for performance critical parts of pixelator"
 readme = "README.md"
 dependencies = []
 
+[project.optional-dependencies]
+dev = ["pytest>=8,<9"]
+
 [tool.maturin]
 module-name = "pixelator_core"
 

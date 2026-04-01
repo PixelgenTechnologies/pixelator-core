@@ -14,7 +14,8 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  test:
+  rust-tests:
+    name: Rust workspace (cargo test)
     runs-on: ubuntu-latest
 
     steps:
@@ -33,3 +34,38 @@ jobs:
 
       - name: Run tests
         run: cargo test --verbose
+
+  pytest-bindings:
+    name: Python bindings (pytest, ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+
+      - name: Setup caching
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-py${{ matrix.python-version }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install maturin and pytest
+        run: pip install maturin "pytest>=8,<9"
+
+      - name: Build extension and run pytest
+        working-directory: packages/python_bindings
+        run: |
+          maturin develop
+          pytest tests/ -v
