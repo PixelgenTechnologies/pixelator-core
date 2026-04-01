@@ -1,13 +1,8 @@
 name: wheels
 
 on:
-  push:
-    branches: [main, dev]
-  pull_request:
-    branches: [main, dev]
   release:
     types: [published]
-  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -16,7 +11,6 @@ concurrency:
 jobs:
   verify-release-version:
     name: verify release tag matches package versions
-    if: github.event_name == 'release'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -46,7 +40,6 @@ jobs:
   build:
     name: build on ${{ matrix.os }} (${{ matrix.target }})
     needs: verify-release-version
-    if: ${{ !cancelled() && (needs.verify-release-version.result == 'success' || needs.verify-release-version.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix:
@@ -117,7 +110,6 @@ jobs:
 
   upload-release-assets:
     name: upload wheels to release
-    if: github.event_name == 'release'
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -136,7 +128,6 @@ jobs:
 
   publish-pypi:
     name: publish wheels to PyPI
-    if: github.event_name == 'release'
     needs: build
     runs-on: ubuntu-latest
     permissions:
