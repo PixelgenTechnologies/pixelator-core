@@ -50,31 +50,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [linux, macos]
-        target: [undefined]
-        manylinux: [auto]
+        os: [linux, macos, windows]
+        target: [x86_64, aarch64]
         include:
-          # linux
           - os: linux
             manylinux: manylinux_2_28
-            target: aarch64
-          - os: linux
-            manylinux: manylinux_2_28
-            target: x86_64
-
-          # macos;
           - os: macos
-            target: x86_64
-          - os: macos
-            target: aarch64
-
-          # windows;
+            manylinux: auto
           - os: windows
-            target: x86_64
-
+            manylinux: auto
         exclude:
-          # was just a dummy variable to set a default value for target
-          - target: undefined
+          # GitHub-hosted Windows is x64; skip non-existent windows/aarch64 leg
+          - os: windows
+            target: aarch64
 
     runs-on: ${{ matrix.runs-on || format('{0}-latest', (matrix.os == 'linux' && 'ubuntu') || matrix.os) }}
     env:
