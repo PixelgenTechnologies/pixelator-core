@@ -32,7 +32,7 @@ use log::debug;
 /// * `flp_epochs` — Number of full FLP passes over `graph`. If `None`, one pass is used.
 /// * `refine_partitions` — If true, aggregate with [`AggregateOptions::OnlyWellConnected`]
 ///   using `randomness` between FLP and Leiden. If false, aggregate with [`AggregateOptions::All`]
-///   instead (each partition become a single node).
+///   instead (each partition becomes a single node).
 /// * `multiplet_recovery` — If true, run [`leiden`] on the aggregated graph. If false, skip
 ///   Leiden; `post_leiden_statistics` then reflects the aggregated state without a Leiden pass.
 ///

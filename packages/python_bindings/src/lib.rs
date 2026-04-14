@@ -140,7 +140,8 @@ py_dataclass!(GraphProperties {
 /// * The path to the written Parquet file (same as `output`, or the default path).
 /// * Graph statistics on the input graph before multiplet recovery (pre-FLP).
 /// * Graph statistics after FLP and aggregation.
-/// * Graph statistics after Leiden.
+/// * Graph statistics after Leiden when `multiplet_recovery` is true, otherwise graph
+///   statistics after aggregation.
 ///
 /// The node partitioning is written in a Parquet file as specified by the `output` parameter.
 #[pyfunction]
