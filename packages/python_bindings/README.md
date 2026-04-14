@@ -68,7 +68,7 @@ print(n_nodes, n_edges, n_components, frac_lcc)
     parquet_file=parquet_file,
     resolution=1.0,
     output="./filtered_edge_list.parquet",
-    epochs=1,
+    flp_epochs=1,
     randomness=0.1,
     seed=42,
     max_iteration=None,
