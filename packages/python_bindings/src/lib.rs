@@ -113,20 +113,35 @@ py_dataclass!(GraphProperties {
     component_size_distribution: HashMap<usize, usize>,
 });
 
-/// Finds community partitioning by combining Fast Label Propagation and Leiden algorithms.
+/// Finds community partitioning by combining Fast Label Propagation (FLP), graph aggregation,
+/// and optionally the Leiden algorithm for multiplet recovery.
 ///
 /// # Arguments
 /// * `parquet_file` - Path to the Parquet file containing the edge list.
-/// * `output` - Path to the output parquet file. Default is `filtered_edge_list.parquet`.
-///
-/// For the other arguments, see the documentation for `run_leiden` and
-/// `run_fast_label_propagation`.
+/// * `resolution` - Resolution parameter for the modularity quality function used in the Leiden
+/// algorithm. Larger values tend to yield smaller communities.
+/// * `output` - Path to the filtered edge-list Parquet file to write. Default is
+///   `filtered_edge_list.parquet`.
+/// * `flp_epochs` - Number of full passes of FLP on the original graph before aggregation.
+///   Default is 1.
+/// * `randomness` - Randomness of Leiden node moves when `multiplet_recovery` is true. Low values
+///   favor moves that improve quality; higher values allow suboptimal moves and can help escape
+///   local minima at the cost of convergence speed. Default is 0.1.
+/// * `seed` - Seed for the random number generator in the weighted partitioned graph (aggregation
+///   and Leiden). If `None`, the implementation uses a default seed of 0.
+/// * `max_iteration` - Maximum number of Leiden iterations when `multiplet_recovery` is true.
+///   In most cases the algorithm stops earlier once converged.
+/// * `multiplet_recovery` - If true, runs Leiden on the aggregated graph after FLP. If false,
+///   the pipeline stops after aggregation and the last statistics tuple matches the aggregated
+///   state without a Leiden refinement pass.
 ///
 /// # Returns
-/// * The path to the parquet output file
-/// * Component statistics pre multiplet recovery
-/// * Component statistics post FLP
-/// * Component statistics post multiplet recovery
+/// A tuple containing:
+/// * The path to the written Parquet file (same as `output`, or the default path).
+/// * Graph statistics on the input graph before multiplet recovery (pre-FLP).
+/// * Graph statistics after FLP and aggregation.
+/// * Graph statistics after Leiden when `multiplet_recovery` is true, otherwise graph
+///   statistics after aggregation.
 ///
 /// The node partitioning is written in a Parquet file as specified by the `output` parameter.
 #[pyfunction]
@@ -135,7 +150,7 @@ pub fn run_hybrid_community_detection(
     parquet_file: String,
     resolution: f64,
     output: Option<String>,
-    epochs: Option<u64>,
+    flp_epochs: Option<u64>,
     randomness: Option<f64>,
     seed: Option<u64>,
     max_iteration: Option<usize>,
@@ -158,7 +173,7 @@ pub fn run_hybrid_community_detection(
         randomness.unwrap_or(0.1),
         seed,
         max_iteration,
-        epochs,
+        flp_epochs,
         false,
         multiplet_recovery,
     );

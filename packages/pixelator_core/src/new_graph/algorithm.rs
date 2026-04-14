@@ -12,6 +12,36 @@ use crate::leiden::weighted_partitioned_graph::{
 };
 use log::debug;
 
+/// Runs a hybrid community-detection pipeline: Fast Label Propagation (FLP) on the input graph,
+/// aggregation into a [`WeightedPartitionedGraph`], then optionally Leiden refinement
+/// (“multiplet recovery”).
+///
+/// # Arguments
+///
+/// * `graph` — Edge-weighted graph (`u8` per-edge weights), typically the raw adjacency before
+///   aggregation.
+/// * `quality_function` — Quality metric (e.g. modularity) used for the weighted partitioned
+///   graph after FLP; drives node sizes and resolution during aggregation and Leiden.
+/// * `randomness` - Randomness of node transitions. Low values will favor moves maximizing the
+///   quality, while higher values will allow suboptimal moves, making it easier to avoid local
+///   minima at the cost of convergence speed. Default value is 0.1
+/// * `seed` — RNG seed for [`WeightedPartitionedGraph::new`]. If `None`, the graph uses its
+///   default seed (0).
+/// * `max_iteration` — Upper bound on Leiden iterations when `multiplet_recovery` is true; the
+///   algorithm may stop earlier when converged.
+/// * `flp_epochs` — Number of full FLP passes over `graph`. If `None`, one pass is used.
+/// * `refine_partitions` — If true, aggregate with [`AggregateOptions::OnlyWellConnected`]
+///   using `randomness` between FLP and Leiden. If false, aggregate with [`AggregateOptions::All`]
+///   instead (each partition becomes a single node).
+/// * `multiplet_recovery` — If true, run [`leiden`] on the aggregated graph. If false, skip
+///   Leiden; `post_leiden_statistics` then reflects the aggregated state without a Leiden pass.
+///
+/// # Returns
+///
+/// * Final node-to-partition map, maps node from the original graph to partitions
+/// * Statistics of the weighted partitioned graph immediately after aggregation (post-FLP).
+/// * Statistics after Leiden when `multiplet_recovery` is true, or the same aggregated statistics
+///   when Leiden was skipped.
 #[allow(clippy::too_many_arguments)]
 pub fn hybrid_community_detection(
     graph: Graph<u8>,
@@ -19,7 +49,7 @@ pub fn hybrid_community_detection(
     randomness: f64,
     seed: Option<u64>,
     max_iteration: Option<usize>,
-    epochs: Option<u64>,
+    flp_epochs: Option<u64>,
     refine_partitions: bool,
     multiplet_recovery: bool,
 ) -> (
@@ -27,7 +57,7 @@ pub fn hybrid_community_detection(
     PartitionedGraphStatistics,
     PartitionedGraphStatistics,
 ) {
-    let epochs = epochs.unwrap_or(1);
+    let flp_epochs = flp_epochs.unwrap_or(1);
 
     let graph_properties = GraphProperties::new(&graph);
     debug!("Graph properties pre-aggregation: {:?}", graph_properties);
@@ -38,7 +68,7 @@ pub fn hybrid_community_detection(
 
     let node_partition = fast_label_propagation::<FastNodePartitioning>(
         &graph,
-        epochs,
+        flp_epochs,
         assignment_strategy,
         node_partition,
     );
