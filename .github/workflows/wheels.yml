@@ -34,6 +34,11 @@ jobs:
           if not workspace_ver:
               raise SystemExit("Cargo.toml missing [workspace.package].version")
 
+          if workspace_ver != tag_ver:
+              raise SystemExit(
+                  f"Cargo.toml has version {cargo_ver!r}, expected {tag_ver!r} from tag {ref_name!r}"
+              )
+
           print(f"OK: tag {ref_name!r} matches workspace version {workspace_ver!r}")
           EOF
 
