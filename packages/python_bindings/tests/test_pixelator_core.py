@@ -75,7 +75,7 @@ def test_run_hybrid_community_detection(small_parquet_path: str, tmp_path: Path)
             small_parquet_path,
             resolution=1.0,
             output=str(out),
-            epochs=1,
+            flp_epochs=1,
             randomness=0.1,
             seed=42,
             max_iteration=None,
