@@ -25,6 +25,7 @@ def test_public_api() -> None:
         "run_label_propagation",
         "run_leiden",
         "run_hybrid_community_detection",
+        "PyGraphProperties",
         "__version__",
     ):
         assert hasattr(pixelator_core, name), f"missing export: {name!r}"

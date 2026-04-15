@@ -44,6 +44,9 @@ mod pixelator_core_py {
     #[pymodule_export]
     use super::run_hybrid_community_detection;
 
+    #[pymodule_export]
+    use super::PyGraphProperties;
+
     #[pymodule_init]
     fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
         pyo3_log::init();
