@@ -6,7 +6,7 @@ resolver = "3"
 # Single source of truth for Rust crates and Python wheels (maturin reads this via the crate).
 # Prereleases use Cargo semver (e.g. 0.1.0-rc1); PEP 440 treats that as the same release as 0.1.0rc1.
 [workspace.package]
-version = "0.1.0-rc2"
+version = "0.1.0-rc3"
 
 [profile.release]
 opt-level = 3
