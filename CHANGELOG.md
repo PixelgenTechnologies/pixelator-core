@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.1.0] - TBD
+## [0.1.0] - 2026-04-16
 
 Initial release: Rust implementation of performance-critical community-detection and graph routines from [pixelator](https://github.com/PixelgenTechnologies/pixelator), with Python bindings, a CLI, and published wheels.
 
