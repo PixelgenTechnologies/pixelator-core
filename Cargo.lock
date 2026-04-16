@@ -493,7 +493,7 @@ checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
 
 [[package]]
 name = "community-detection"
-version = "0.1.0-rc2"
+version = "0.1.0-rc3"
 dependencies = [
  "clap",
  "env_logger",
@@ -1204,7 +1204,7 @@ checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
 name = "pixelator-core"
-version = "0.1.0-rc2"
+version = "0.1.0-rc3"
 dependencies = [
  "arrow",
  "clap",
@@ -1229,7 +1229,7 @@ dependencies = [
 
 [[package]]
 name = "pixelator_core_py"
-version = "0.1.0-rc2"
+version = "0.1.0-rc3"
 dependencies = [
  "log",
  "mimalloc",

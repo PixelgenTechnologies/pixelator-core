@@ -37,7 +37,7 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run benchmarks
-        run: cargo bench 2>&1 | tee output.txt
+        run: cargo bench --locked 2>&1 | tee output.txt
 
       - name: Convert divan output to json
         run: |
