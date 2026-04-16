@@ -1,4 +1,3 @@
-
 [workspace]
 members = ["packages/cli", "packages/pixelator_core", "packages/python_bindings"]
 resolver = "3"
