@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1776344613617,
+  "lastUpdate": 1776345897860,
   "repoUrl": "https://github.com/PixelgenTechnologies/pixelator-core",
   "entries": {
     "Native Community Detection Benchmark": [
@@ -1321,6 +1321,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "bench_parquet_writing",
             "value": 0.5275,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "adrien.coulier@pixelgen.com",
+            "name": "Adrien Coulier",
+            "username": "Aratz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d86ecaa1c962cb873b68935fa863edad4bbcbaf6",
+          "message": "Merge pull request #7 from PixelgenTechnologies/pre-release-0.1.0\n\nPre release 0.1.0",
+          "timestamp": "2026-04-16T15:19:32+02:00",
+          "tree_id": "9f0dfa924ce9c1880a3870801911380ec79aabf3",
+          "url": "https://github.com/PixelgenTechnologies/pixelator-core/commit/d86ecaa1c962cb873b68935fa863edad4bbcbaf6"
+        },
+        "date": 1776345896738,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "bench_fast_label_propagation",
+            "value": 0.005908,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity",
+            "value": 0.02759,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity_medium",
+            "value": 15.37,
+            "unit": "s"
+          },
+          {
+            "name": "bench_create_graph_from_parquet",
+            "value": 1.76,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_reading",
+            "value": 0.4349,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_writing",
+            "value": 0.5027,
             "unit": "s"
           }
         ]
