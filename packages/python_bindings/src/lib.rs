@@ -291,8 +291,8 @@ pub fn run_leiden(
         None,
     );
 
-    let node_partition = wp_graph.get_partitioning();
-    write_node_partitions_to_parquet(output_file, node_partition, &umi_mapping, None)
+    let node_partition = FastNodePartitioning::initialize_from_partitions(wp_graph.get_ancestor_to_partition_map());
+    write_node_partitions_to_parquet(output_file, &node_partition, &umi_mapping, None)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{:?}", e)))?;
 
     Ok((node_partition.num_partitions(), wp_graph.quality()))
