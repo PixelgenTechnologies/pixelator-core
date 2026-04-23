@@ -29,10 +29,11 @@ CI currently builds wheels for Linux, macOS, and Windows across Python 3.10-3.13
 
 ```bash
 cd packages/python_bindings
+uv sync --extra dev
 uv run maturin develop --release
 ```
 
-This builds and installs `pixelator_core_py` into your active Python environment.
+This builds and installs `pixelator_core` into your project `uv` environment.
 
 ### Option 2: Build a wheel and install it
 
@@ -45,7 +46,7 @@ pip install dist/*.whl
 ## Quickstart
 
 ```python
-from pixelator_core_py import (
+from pixelator_core import (
     find_graph_statistics,
     run_label_propagation,
     run_leiden,
@@ -95,17 +96,25 @@ The module initializes Rust logging via `pyo3-log` when imported. Configure Pyth
   - Ensure Rust is installed and up to date (`rustup update`).
 - Bindings not updated after build
   - Reinstall in the active environment with `uv run maturin develop --release`.
-  - Run `uv sync --reinstall-package pixelator-core-py`
+  - Run `uv sync --reinstall-package pixelgen-pixelator-core`
 - Architecture mismatch (especially on macOS):
   - Ensure Python interpreter architecture matches your target wheel/build.
 
 ## Development
 
-From the repository root, general build commands are documented in the main `README.md`. For Python bindings specifically:
+From the repository root, run Python binding tests with:
+
+```bash
+bash scripts/test-python-bindings.sh
+```
+
+For a manual build-only flow in `packages/python_bindings`:
 
 ```bash
 cd packages/python_bindings
+uv sync --extra dev
 uv run maturin develop --release
+uv sync --reinstall-package pixelgen-pixelator-core
 ```
 
 ## License
