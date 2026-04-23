@@ -15,7 +15,7 @@ use pixelator_core::fast_label_propagation::strategies::{
 use pixelator_core::leiden::algorithm::leiden;
 use pixelator_core::leiden::quality::modularity::Modularity;
 use pixelator_core::leiden::weighted_partitioned_graph::WeightedPartitionedGraph;
-use pixelator_core::new_graph::algorithm::hybrid_community_detection;
+use pixelator_core::hybrid_community_detection::algorithm::hybrid_community_detection;
 
 use log::debug;
 
