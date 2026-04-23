@@ -39,8 +39,9 @@ To build and install the bindings in the local `uv` environment:
 
 ```bash
 cd packages/python_bindings
-uv sync --extra dev
-uv run maturin develop --release
+uv sync --extra dev --no-install-project
+uv run maturin develop
+uv sync --refresh --extra dev
 ```
 
 You can then use them as follows:

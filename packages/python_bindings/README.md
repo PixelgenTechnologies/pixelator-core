@@ -29,8 +29,9 @@ CI currently builds wheels for Linux, macOS, and Windows across Python 3.10-3.13
 
 ```bash
 cd packages/python_bindings
-uv sync --extra dev
-uv run maturin develop --release
+uv sync --extra dev --no-install-project
+uv run maturin develop
+uv sync --refresh --extra dev
 ```
 
 This builds and installs `pixelator_core` into your project `uv` environment.
@@ -112,9 +113,9 @@ For a manual build-only flow in `packages/python_bindings`:
 
 ```bash
 cd packages/python_bindings
-uv sync --extra dev
-uv run maturin develop --release
-uv sync --reinstall-package pixelgen-pixelator-core
+uv sync --extra dev --no-install-project
+uv run maturin develop
+uv sync --refresh --extra dev
 ```
 
 ## License
