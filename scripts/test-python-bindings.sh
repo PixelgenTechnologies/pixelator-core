@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PY_BINDINGS_DIR="${REPO_ROOT}/packages/python_bindings"
 
 cd "${PY_BINDINGS_DIR}"
+uv sync --extra dev --no-install-project
 uv run maturin develop
-uv sync --reinstall-package pixelgen-pixelator-core --extra dev
+uv sync --refresh --extra dev
 uv run pytest tests/ -v

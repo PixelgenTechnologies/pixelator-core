@@ -7,7 +7,7 @@ readme = "README.md"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<9", "pyarrow>=14"]
+dev = ["pytest>=8,<9", "pyarrow>=14", "maturin>=1,<2"]
 
 [tool.maturin]
 module-name = "pixelator_core"
