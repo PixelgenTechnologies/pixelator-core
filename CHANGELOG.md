@@ -46,5 +46,6 @@ Initial release: Rust implementation of performance-critical community-detection
   - `run_label_propagation`, `run_leiden`, `run_hybrid_community_detection`, `find_graph_statistics`, and `GraphProperties`-style results for hybrid workflows.
   - Module `__version__` aligned with the Rust crate version.
 
-[Unreleased]: https://github.com/PixelgenTechnologies/pixelator-core/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/PixelgenTechnologies/pixelator-core/compare/v0.1.1...HEAD
+[0.1.0]: https://github.com/PixelgenTechnologies/pixelator-core/releases/tag/v0.1.1
 [0.1.0]: https://github.com/PixelgenTechnologies/pixelator-core/releases/tag/v0.1.0
