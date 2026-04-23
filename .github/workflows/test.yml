@@ -63,11 +63,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
       - name: Build extension and run pytest
-        working-directory: packages/python_bindings
-        run: |
-          python -m venv .venv
-          .venv/bin/pip install --upgrade pip
-          .venv/bin/pip install maturin "pytest>=8,<9"
-          .venv/bin/maturin develop
-          .venv/bin/pytest tests/ -v
+        run: bash scripts/test-python-bindings.sh
