@@ -12,10 +12,10 @@ use pixelator_core::fast_label_propagation::algorithm::fast_label_propagation;
 use pixelator_core::fast_label_propagation::strategies::{
     AssignmentStrategy, DefaultAssignmentStrategy,
 };
+use pixelator_core::hybrid_community_detection::algorithm::hybrid_community_detection;
 use pixelator_core::leiden::algorithm::leiden;
 use pixelator_core::leiden::quality::modularity::Modularity;
 use pixelator_core::leiden::weighted_partitioned_graph::WeightedPartitionedGraph;
-use pixelator_core::hybrid_community_detection::algorithm::hybrid_community_detection;
 
 use log::debug;
 
@@ -291,7 +291,8 @@ pub fn run_leiden(
         None,
     );
 
-    let node_partition = FastNodePartitioning::initialize_from_partitions(wp_graph.get_ancestor_to_partition_map());
+    let node_partition =
+        FastNodePartitioning::initialize_from_partitions(wp_graph.get_ancestor_to_partition_map());
     write_node_partitions_to_parquet(output_file, &node_partition, &umi_mapping, None)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{:?}", e)))?;
 
