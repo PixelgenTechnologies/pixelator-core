@@ -318,6 +318,54 @@ mod tests {
     }
 
     #[test]
+    fn test_leiden_uses_absolute_merge_threshold() {
+        let edges = vec![
+            Edge::new(0, 1, Some(6)),
+            Edge::new(1, 2, Some(6)),
+            Edge::new(2, 0, Some(15)),
+        ];
+        let num_nodes = 3;
+        let graph = Graph::<usize>::from_edges(edges.into_iter(), num_nodes);
+        let partitioning = LeidenNodePartitioning::initialize_with_singlet_partitions(num_nodes);
+        let quality = Modularity::new(0.5, graph.get_total_edge_weight());
+        let mut wp_graph = WeightedPartitionedGraph::new(graph, partitioning, quality, None, None);
+
+        leiden(
+            &mut wp_graph,
+            1.0,
+            Some(0),
+            Some(ThresholdOptions::Absolute(10)),
+        );
+
+        assert_eq!(wp_graph.get_graph().get_num_nodes(), 2);
+        assert_eq!(wp_graph.get_graph().get_edge_weight(0, 1), Some(12));
+    }
+
+    #[test]
+    fn test_leiden_uses_relative_merge_threshold() {
+        let edges = vec![
+            Edge::new(0, 1, Some(4)),
+            Edge::new(1, 2, Some(6)),
+            Edge::new(2, 0, Some(15)),
+        ];
+        let num_nodes = 3;
+        let graph = Graph::<usize>::from_edges(edges.into_iter(), num_nodes);
+        let partitioning = LeidenNodePartitioning::initialize_with_singlet_partitions(num_nodes);
+        let quality = Modularity::new(0.5, graph.get_total_edge_weight());
+        let mut wp_graph = WeightedPartitionedGraph::new(graph, partitioning, quality, None, None);
+
+        leiden(
+            &mut wp_graph,
+            1.0,
+            Some(0),
+            Some(ThresholdOptions::Relative(5.0)),
+        );
+
+        assert_eq!(wp_graph.get_graph().get_num_nodes(), 2);
+        assert_eq!(wp_graph.get_graph().get_edge_weight(0, 1), Some(10));
+    }
+
+    #[test]
     fn test_move_nodes_fast() {
         let graph = get_example_graph::<usize>();
         let cpm = ConstantPottsModel { resolution: 0.5 };

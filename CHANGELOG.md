@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Expose merge threshold in python bindings. This makes it possible to merge
+  communities when they share many edges together after Leiden.
+
 ### Changed
 
 ### Deprecated
