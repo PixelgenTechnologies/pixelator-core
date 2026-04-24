@@ -108,7 +108,7 @@ def test_run_leiden_with_both_merge_thresholds_raises(
 ) -> None:
     out = tmp_path / "leiden_partitions_invalid_thresholds.parquet"
     with pytest.raises(
-        BaseException,
+        ValueError,
         match="`merge_edge_threshold` and `merge_edge_threshold_relative` cannot both be used at the same time",
     ):
         pixelator_core.run_leiden(
