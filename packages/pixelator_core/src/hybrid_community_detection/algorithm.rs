@@ -49,7 +49,7 @@ pub fn hybrid_community_detection(
     randomness: f64,
     seed: Option<u64>,
     max_iteration: Option<usize>,
-    flp_epochs: Option<u64>,
+    flp_epochs: u64,
     refine_partitions: bool,
     multiplet_recovery: bool,
 ) -> (
@@ -57,8 +57,6 @@ pub fn hybrid_community_detection(
     PartitionedGraphStatistics,
     PartitionedGraphStatistics,
 ) {
-    let flp_epochs = flp_epochs.unwrap_or(1);
-
     let graph_properties = GraphProperties::new(&graph);
     debug!("Graph properties pre-aggregation: {:?}", graph_properties);
 
@@ -130,16 +128,8 @@ mod tests {
         let randomness = 1.;
         let seed = None;
 
-        let (result_partition, _, _) = hybrid_community_detection(
-            graph,
-            quality,
-            randomness,
-            seed,
-            Some(100),
-            None,
-            false,
-            true,
-        );
+        let (result_partition, _, _) =
+            hybrid_community_detection(graph, quality, randomness, seed, Some(100), 1, false, true);
 
         assert_eq!(
             result_partition.get_node_to_partition_map(),
@@ -161,16 +151,8 @@ mod tests {
         let randomness = 1.;
         let seed = None;
 
-        let (result_partition, _, _) = hybrid_community_detection(
-            graph,
-            quality,
-            randomness,
-            seed,
-            Some(100),
-            None,
-            false,
-            true,
-        );
+        let (result_partition, _, _) =
+            hybrid_community_detection(graph, quality, randomness, seed, Some(100), 1, false, true);
         let result_partition_map = result_partition.get_node_to_partition_map();
 
         assert_eq!(result_partition_map[0], result_partition_map[1]);
@@ -188,16 +170,8 @@ mod tests {
         let randomness = 1.;
         let seed = None;
 
-        let (result_partition, _, _) = hybrid_community_detection(
-            graph,
-            quality,
-            randomness,
-            seed,
-            Some(100),
-            None,
-            false,
-            true,
-        );
+        let (result_partition, _, _) =
+            hybrid_community_detection(graph, quality, randomness, seed, Some(100), 1, false, true);
         let result_partition_map = result_partition.get_node_to_partition_map();
 
         assert_eq!(result_partition_map.len(), num_nodes);
@@ -226,7 +200,7 @@ mod tests {
             randomness,
             Some(seed),
             Some(100),
-            None,
+            1,
             false,
             true,
         );
