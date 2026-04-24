@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pyarrow.parquet as pq
 import pytest
 
 import pixelator_core
@@ -43,6 +44,7 @@ def test_find_graph_statistics(small_parquet_path: str) -> None:
 
 
 def test_run_leiden(small_parquet_path: str, tmp_path: Path) -> None:
+    n_nodes, *_ = pixelator_core.find_graph_statistics(small_parquet_path)
     out = tmp_path / "leiden_partitions.parquet"
     n_partitions, quality = pixelator_core.run_leiden(
         small_parquet_path,
@@ -56,6 +58,7 @@ def test_run_leiden(small_parquet_path: str, tmp_path: Path) -> None:
     assert out.is_file()
     assert isinstance(n_partitions, int) and n_partitions >= 1
     assert isinstance(quality, float)
+    assert pq.read_metadata(out).num_rows == n_nodes
 
 
 def test_run_label_propagation(small_parquet_path: str, tmp_path: Path) -> None:

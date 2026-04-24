@@ -87,7 +87,8 @@ fn main() {
             epochs,
             output,
         }) => {
-            if run_flp(parquet_file, epochs, output).is_err() {
+            let res = run_flp(parquet_file, epochs, output);
+            if res.is_err() {
                 std::process::exit(1);
             }
         }
@@ -96,7 +97,8 @@ fn main() {
             resolution,
             output,
         }) => {
-            if run_leiden(parquet_file, *resolution, 1.0, Some(1), None, output).is_err() {
+            let res = run_leiden(parquet_file, *resolution, 1.0, Some(1), None, output);
+            if res.is_err() {
                 std::process::exit(1);
             }
         }

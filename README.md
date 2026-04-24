@@ -33,17 +33,21 @@ After building the cli will be in `target/release/community-detection` and can b
 
 ## Python bindings
 
-The python bindings are in the `packages/python_bindings` folder. To get started (using `uv`) use:
+The python bindings are in the `packages/python_bindings` folder.
+
+To build and install the bindings in the local `uv` environment:
 
 ```bash
 cd packages/python_bindings
-uv run maturin develop --release
+uv sync --extra dev --no-install-project
+uv run maturin develop
+uv sync --refresh --extra dev
 ```
 
-This will build the bindings and install them in your current python environment. You can then use them as follows:
+You can then use them as follows:
 
 ```python
-from pixelator_core_py import run_label_propagation
+from pixelator_core import run_label_propagation
 
 run_label_propagation(
     parquet_file="./edgelist.parquet",
@@ -64,6 +68,13 @@ A wheel file will be created in the `dist/` folder after building. You can insta
 ```bash
 pip install path/to/wheel/file.whl
 ```
+
+To run Python binding tests (build + pytest, using `uv`), use:
+
+```bash
+bash scripts/test-python-bindings.sh
+```
+
 
 ## Benchmark tests
 
