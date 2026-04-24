@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1777011841678,
+  "lastUpdate": 1777011848430,
   "repoUrl": "https://github.com/PixelgenTechnologies/pixelator-core",
   "entries": {
     "Native Community Detection Benchmark": [
@@ -1833,6 +1833,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "bench_parquet_writing",
             "value": 0.4972,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "adrien.coulier@pixelgen.com",
+            "name": "Adrien Coulier",
+            "username": "Aratz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "be942cba11ab978e8bd4b718a581b41a76ee9412",
+          "message": "Merge pull request #12 from PixelgenTechnologies/pre-release-0.1.1\n\nPre release 0.1.1",
+          "timestamp": "2026-04-24T08:18:41+02:00",
+          "tree_id": "4d0c9a3ae27663ef892b1decb7b0da5f255db858",
+          "url": "https://github.com/PixelgenTechnologies/pixelator-core/commit/be942cba11ab978e8bd4b718a581b41a76ee9412"
+        },
+        "date": 1777011845823,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "bench_fast_label_propagation",
+            "value": 0.006182000000000001,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity",
+            "value": 0.02731,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity_medium",
+            "value": 14.77,
+            "unit": "s"
+          },
+          {
+            "name": "bench_create_graph_from_parquet",
+            "value": 1.754,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_reading",
+            "value": 0.4447,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_writing",
+            "value": 0.5105000000000001,
             "unit": "s"
           }
         ]
