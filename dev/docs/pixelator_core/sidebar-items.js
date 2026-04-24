@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["common","fast_label_propagation","leiden","new_graph"]};
+window.SIDEBAR_ITEMS = {"mod":["common","fast_label_propagation","hybrid_community_detection","leiden"]};

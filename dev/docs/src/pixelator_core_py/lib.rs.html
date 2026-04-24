@@ -12,10 +12,10 @@
 <a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>pixelator_core::fast_label_propagation::strategies::{
 <a href=#13 id=13 data-nosnippet>13</a>    AssignmentStrategy, DefaultAssignmentStrategy,
 <a href=#14 id=14 data-nosnippet>14</a>};
-<a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>pixelator_core::leiden::algorithm::leiden;
-<a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>pixelator_core::leiden::quality::modularity::Modularity;
-<a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>pixelator_core::leiden::weighted_partitioned_graph::WeightedPartitionedGraph;
-<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>pixelator_core::new_graph::algorithm::hybrid_community_detection;
+<a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>pixelator_core::hybrid_community_detection::algorithm::hybrid_community_detection;
+<a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>pixelator_core::leiden::algorithm::leiden;
+<a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>pixelator_core::leiden::quality::modularity::Modularity;
+<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>pixelator_core::leiden::weighted_partitioned_graph::WeightedPartitionedGraph;
 <a href=#19 id=19 data-nosnippet>19</a>
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>log::debug;
 <a href=#21 id=21 data-nosnippet>21</a>
@@ -291,10 +291,11 @@
 <a href=#291 id=291 data-nosnippet>291</a>        <span class="prelude-val">None</span>,
 <a href=#292 id=292 data-nosnippet>292</a>    );
 <a href=#293 id=293 data-nosnippet>293</a>
-<a href=#294 id=294 data-nosnippet>294</a>    <span class="kw">let </span>node_partition = wp_graph.get_partitioning();
-<a href=#295 id=295 data-nosnippet>295</a>    write_node_partitions_to_parquet(output_file, node_partition, <span class="kw-2">&amp;</span>umi_mapping, <span class="prelude-val">None</span>)
-<a href=#296 id=296 data-nosnippet>296</a>        .map_err(|e| PyErr::new::&lt;pyo3::exceptions::PyRuntimeError, <span class="kw">_</span>&gt;(<span class="macro">format!</span>(<span class="string">"{:?}"</span>, e)))<span class="question-mark">?</span>;
-<a href=#297 id=297 data-nosnippet>297</a>
-<a href=#298 id=298 data-nosnippet>298</a>    <span class="prelude-val">Ok</span>((node_partition.num_partitions(), wp_graph.quality()))
-<a href=#299 id=299 data-nosnippet>299</a>}
+<a href=#294 id=294 data-nosnippet>294</a>    <span class="kw">let </span>node_partition =
+<a href=#295 id=295 data-nosnippet>295</a>        FastNodePartitioning::initialize_from_partitions(wp_graph.get_ancestor_to_partition_map());
+<a href=#296 id=296 data-nosnippet>296</a>    write_node_partitions_to_parquet(output_file, <span class="kw-2">&amp;</span>node_partition, <span class="kw-2">&amp;</span>umi_mapping, <span class="prelude-val">None</span>)
+<a href=#297 id=297 data-nosnippet>297</a>        .map_err(|e| PyErr::new::&lt;pyo3::exceptions::PyRuntimeError, <span class="kw">_</span>&gt;(<span class="macro">format!</span>(<span class="string">"{:?}"</span>, e)))<span class="question-mark">?</span>;
+<a href=#298 id=298 data-nosnippet>298</a>
+<a href=#299 id=299 data-nosnippet>299</a>    <span class="prelude-val">Ok</span>((node_partition.num_partitions(), wp_graph.quality()))
+<a href=#300 id=300 data-nosnippet>300</a>}
 </code></pre></div></section></main></body></html>
