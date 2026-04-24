@@ -13,7 +13,7 @@ use pixelator_core::fast_label_propagation::strategies::{
     AssignmentStrategy, DefaultAssignmentStrategy,
 };
 use pixelator_core::hybrid_community_detection::algorithm::hybrid_community_detection;
-use pixelator_core::leiden::algorithm::leiden;
+use pixelator_core::leiden::algorithm::{leiden, ThresholdOptions};
 use pixelator_core::leiden::quality::modularity::Modularity;
 use pixelator_core::leiden::weighted_partitioned_graph::WeightedPartitionedGraph;
 
@@ -252,6 +252,11 @@ pub fn run_label_propagation(
 /// quality, while higher values will allow suboptimal moves, making it easier to avoid local
 /// minima at the cost of convergence speed. Default value is 0.1
 /// * `seed` - seed to use in the random generator
+/// * `merge_edge_threshold` - Merge communities when their connecting edge count exceeds this
+///   absolute threshold. Cannot be used together with `merge_edge_threshold_relative`.
+/// * `merge_edge_threshold_relative` - Merge communities when their connecting edge relative to the
+/// number of nodes in the smallest community exceeds this threshold. Cannot be used together with
+/// `merge_edge_threshold`.
 ///
 /// # Returns
 /// A tuple containing:
@@ -269,8 +274,21 @@ pub fn run_leiden(
     output: Option<String>,
     randomness: Option<f64>,
     seed: Option<u64>,
+    merge_edge_threshold: Option<usize>,
+    merge_edge_threshold_relative: Option<f64>,
 ) -> PyResult<(usize, f64)> {
     let output_file = output.unwrap_or_else(|| "node_partitions.parquet".to_string());
+    let merge_threshold = match (merge_edge_threshold, merge_edge_threshold_relative) {
+        (Some(_), Some(_)) => {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "`merge_edge_threshold` and `merge_edge_threshold_relative` cannot both be used at the same time",
+        ));
+        }
+        (Some(v), None) => Some(ThresholdOptions::Absolute(v)),
+        (None, Some(v)) => Some(ThresholdOptions::Relative(v)),
+        (None, None) => None,
+    };
+
     let (umi_mapping, graph) =
         create_graph_and_umi_mapping_from_parquet_file::<usize>(&parquet_file);
 
@@ -288,7 +306,7 @@ pub fn run_leiden(
         &mut wp_graph,
         randomness.unwrap_or(0.1),
         max_iteration,
-        None,
+        merge_threshold,
     );
 
     let node_partition =
