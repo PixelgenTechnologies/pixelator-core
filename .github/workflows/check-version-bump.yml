@@ -27,12 +27,11 @@ jobs:
           set -euo pipefail
 
           get_workspace_version() {
-            python - <<'PY'
+            python -c "
           import sys
           import tomllib
           data = tomllib.loads(sys.stdin.read())
-          print(data["workspace"]["package"]["version"])
-          PY
+          print(data[\"workspace\"][\"package\"][\"version\"])"
           }
 
           base_version="$(git show "${BASE_SHA}:Cargo.toml" | get_workspace_version)"
