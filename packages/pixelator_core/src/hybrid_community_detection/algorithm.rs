@@ -29,7 +29,7 @@ use log::debug;
 ///   default seed (0).
 /// * `max_iteration` — Upper bound on Leiden iterations when `multiplet_recovery` is true; the
 ///   algorithm may stop earlier when converged.
-/// * `flp_epochs` — Number of full FLP passes over `graph`. If `None`, one pass is used.
+/// * `flp_epochs` — Number of full FLP passes over `graph`.
 /// * `refine_partitions` — If true, aggregate with [`AggregateOptions::OnlyWellConnected`]
 ///   using `randomness` between FLP and Leiden. If false, aggregate with [`AggregateOptions::All`]
 ///   instead (each partition becomes a single node).
