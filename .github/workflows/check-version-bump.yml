@@ -35,10 +35,10 @@ jobs:
           PY
           }
 
-          head_version="$(get_workspace_version < Cargo.toml)"
           base_version="$(git show "${BASE_SHA}:Cargo.toml" | get_workspace_version)"
-
           echo "base(main) version: ${base_version}"
+
+          head_version="$(get_workspace_version < Cargo.toml)"
           echo "head(dev)  version: ${head_version}"
 
           if [ "${head_version}" = "${base_version}" ]; then
