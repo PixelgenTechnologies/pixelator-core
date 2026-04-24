@@ -61,6 +61,69 @@ def test_run_leiden(small_parquet_path: str, tmp_path: Path) -> None:
     assert pq.read_metadata(out).num_rows == n_nodes
 
 
+def test_run_leiden_with_absolute_merge_threshold(
+    small_parquet_path: str, tmp_path: Path
+) -> None:
+    n_nodes, *_ = pixelator_core.find_graph_statistics(small_parquet_path)
+    out = tmp_path / "leiden_partitions_absolute_threshold.parquet"
+    n_partitions, quality = pixelator_core.run_leiden(
+        small_parquet_path,
+        max_iteration=None,
+        partition=None,
+        resolution=1.0,
+        output=str(out),
+        randomness=0.1,
+        seed=42,
+        merge_edge_threshold=10,
+    )
+    assert out.is_file()
+    assert isinstance(n_partitions, int) and n_partitions >= 1
+    assert isinstance(quality, float)
+    assert pq.read_metadata(out).num_rows == n_nodes
+
+
+def test_run_leiden_with_relative_merge_threshold(
+    small_parquet_path: str, tmp_path: Path
+) -> None:
+    n_nodes, *_ = pixelator_core.find_graph_statistics(small_parquet_path)
+    out = tmp_path / "leiden_partitions_relative_threshold.parquet"
+    n_partitions, quality = pixelator_core.run_leiden(
+        small_parquet_path,
+        max_iteration=None,
+        partition=None,
+        resolution=1.0,
+        output=str(out),
+        randomness=0.1,
+        seed=42,
+        merge_edge_threshold_relative=0.1,
+    )
+    assert out.is_file()
+    assert isinstance(n_partitions, int) and n_partitions >= 1
+    assert isinstance(quality, float)
+    assert pq.read_metadata(out).num_rows == n_nodes
+
+
+def test_run_leiden_with_both_merge_thresholds_raises(
+    small_parquet_path: str, tmp_path: Path
+) -> None:
+    out = tmp_path / "leiden_partitions_invalid_thresholds.parquet"
+    with pytest.raises(
+        BaseException,
+        match="`merge_edge_threshold` and `merge_edge_threshold_relative` cannot both be used at the same time",
+    ):
+        pixelator_core.run_leiden(
+            small_parquet_path,
+            max_iteration=None,
+            partition=None,
+            resolution=1.0,
+            output=str(out),
+            randomness=0.1,
+            seed=42,
+            merge_edge_threshold=10,
+            merge_edge_threshold_relative=0.1,
+        )
+
+
 def test_run_label_propagation(small_parquet_path: str, tmp_path: Path) -> None:
     out = tmp_path / "flp_partitions.parquet"
     n_partitions = pixelator_core.run_label_propagation(
