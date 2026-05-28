@@ -13,7 +13,8 @@ statistics and community detection algorithms for fast execution from Python.
   - Leiden
   - Hybrid FLP + Leiden flow (`run_hybrid_community_detection`)
 
-> NB: parquet-backed APIs are kept for memory-efficient workflows; dedicated NetworkX APIs are available for in-memory graphs.
+> NB: There are two main types of APIs provided by this package: parquet-backed APIs workflows where
+> memory-efficiency is a high priority and dedicated NetworkX APIs for in-memory graphs.
 
 ## Requirements
 
@@ -82,7 +83,10 @@ print("Filtered edge list written to:", output_file)
 print("Pre recovery nodes:", pre_recovery_stats.node_count)
 ```
 
-### NetworkX in-memory usage
+### NetworkX usage
+
+NetworkX APIs are provided for easy of use, for scenarios when the lowest possible
+memory usage is not a priority.
 
 ```python
 import networkx as nx
@@ -109,7 +113,7 @@ print(leiden_communities)
 ```
 
 Weight constraints for NetworkX APIs:
-- `run_leiden_networkx` accepts non-negative integer-like weights (`1`, `2.0`) and rejects fractional weights (for example `0.5`).
+- `run_leiden_networkx` accepts non-negative integer-like weights and rejects fractional weights (for example `0.5`).
 - `run_label_propagation_networkx` uses the same non-negative integer-like requirement and also requires weights to fit in `u8` (`0..=255`).
 
 ## Input and Output

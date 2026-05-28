@@ -230,6 +230,10 @@ fn validate_networkx_graph(graph: &Bound<'_, PyAny>) -> PyResult<()> {
     Ok(())
 }
 
+/// Resolve a Python node label to its internal contiguous node index.
+///
+/// # Errors
+/// Returns `TypeError` if the node label is missing from the precomputed node-index map.
 fn extract_node_index(
     node_to_index: &Bound<'_, PyDict>,
     node: &Bound<'_, PyAny>,
@@ -244,6 +248,14 @@ fn extract_node_index(
         .extract::<usize>()
 }
 
+/// Parse and validate a NetworkX edge weight as a non-negative integer-like value.
+///
+/// Accepts:
+/// - Python integers `>= 0`
+/// - Finite floats with zero fractional part (for example `2.0`)
+///
+/// # Errors
+/// Returns `TypeError` for negative, fractional, non-finite, or non-numeric values.
 fn extract_non_negative_integral_weight(weight: &Bound<'_, PyAny>) -> PyResult<usize> {
     if let Ok(value) = weight.extract::<usize>() {
         return Ok(value);
@@ -260,6 +272,17 @@ fn extract_non_negative_integral_weight(weight: &Bound<'_, PyAny>) -> PyResult<u
     ))
 }
 
+/// Convert a NetworkX graph-like Python object to indexed node labels and weighted edges.
+///
+/// The returned tuple contains:
+/// - `node_labels`: `index -> original Python node label`
+/// - `weighted_edges`: `(src_index, dst_index, weight)` using validated integer-like weights
+///
+/// Edge weights are read via `edges(data="weight", default=1)`.
+///
+/// # Errors
+/// Returns `TypeError` when the graph shape is invalid, edges are malformed, node labels are
+/// inconsistent, or weights fail validation.
 fn networkx_to_weighted_edges(
     graph: &Bound<'_, PyAny>,
 ) -> PyResult<(Vec<Py<PyAny>>, Vec<(usize, usize, usize)>)> {
@@ -309,6 +332,10 @@ fn networkx_to_weighted_edges(
     Ok((node_labels, weighted_edges))
 }
 
+/// Convert an internal node partition into Python communities preserving original labels.
+///
+/// Communities are returned as a list of Python sets. The list order is stabilized by the
+/// minimum node index in each community to improve deterministic behavior.
 fn partition_to_python_communities<P: NodePartitioning>(
     py: Python<'_>,
     node_partition: &P,
@@ -329,6 +356,10 @@ fn partition_to_python_communities<P: NodePartitioning>(
     Ok(communities.into_iter().map(|(_, community)| community).collect())
 }
 
+/// Build merge-threshold options from mutually exclusive absolute/relative parameters.
+///
+/// # Errors
+/// Returns `ValueError` when both threshold parameters are provided simultaneously.
 fn get_merge_threshold(
     merge_edge_threshold: Option<usize>,
     merge_edge_threshold_relative: Option<f64>,
@@ -343,12 +374,19 @@ fn get_merge_threshold(
     }
 }
 
+/// Run Fast Label Propagation on an already constructed unweighted/`u8` graph.
 fn run_flp_core(graph: &Graph<u8>, epochs: u64) -> FastNodePartitioning {
     let node_partition = FastNodePartitioning::initialize_with_singlet_partitions(graph.get_num_nodes());
     let assignment_strategy: &dyn AssignmentStrategy<_> = &DefaultAssignmentStrategy;
     fast_label_propagation(graph, epochs, assignment_strategy, node_partition)
 }
 
+/// Build the initial Leiden partition from optional labels or singlet defaults.
+///
+/// When `mismatch_err` is set, validates the provided partition length against `node_count`.
+///
+/// # Errors
+/// Returns `ValueError` if partition length validation fails.
 fn build_leiden_partition(
     partition: Option<Vec<usize>>,
     node_count: usize,
@@ -370,6 +408,13 @@ fn build_leiden_partition(
     }
 }
 
+/// Execute the shared Leiden core pipeline on an indexed graph.
+///
+/// This helper is reused by both parquet-backed and NetworkX-backed public Leiden APIs.
+/// It initializes the partition, runs Leiden, and returns `(partition, quality)`.
+///
+/// # Errors
+/// Propagates partition validation errors from `build_leiden_partition`.
 #[allow(clippy::too_many_arguments)]
 fn run_leiden_core(
     graph: Graph<usize>,
@@ -397,8 +442,17 @@ fn run_leiden_core(
 /// * `graph` - A NetworkX graph object.
 /// * `epochs` - Number of times FLP is run. Default is once.
 ///
+/// NetworkX edge weights are read from the `weight` attribute (default `1` when absent).
+/// Weights must be non-negative integer-like values and must fit in `u8` (`0..=255`).
+///
 /// # Returns
 /// A list of disjoint sets representing communities of the graph.
+///
+/// # Errors
+/// Returns:
+/// * `TypeError` when the input is not NetworkX-like or when an edge weight is not
+///   non-negative integer-like.
+/// * `ValueError` when an edge weight exceeds the `u8` range.
 #[pyfunction(signature = (graph, epochs=1))]
 pub fn run_label_propagation_networkx(
     py: Python<'_>,
@@ -508,8 +562,18 @@ pub fn run_leiden(
 /// * `merge_edge_threshold` - Absolute merge threshold.
 /// * `merge_edge_threshold_relative` - Relative merge threshold.
 ///
+/// NetworkX edge weights are read from the `weight` attribute (default `1` when absent).
+/// Weights must be non-negative integer-like values. Fractional values are rejected.
+///
 /// # Returns
 /// A list of disjoint sets representing communities of the graph.
+///
+/// # Errors
+/// Returns:
+/// * `TypeError` when the input is not NetworkX-like or when an edge weight is not
+///   non-negative integer-like.
+/// * `ValueError` when both merge thresholds are set or when the provided partition length
+///   does not match the number of graph nodes.
 #[pyfunction(signature = (
     graph,
     resolution,
