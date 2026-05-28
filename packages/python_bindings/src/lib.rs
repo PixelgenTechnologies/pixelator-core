@@ -256,7 +256,7 @@ fn extract_node_index(
 ///
 /// # Errors
 /// Returns `TypeError` for negative, fractional, non-finite, or non-numeric values.
-fn extract_non_negative_integral_weight(weight: &Bound<'_, PyAny>) -> PyResult<usize> {
+fn extract_non_negative_integer_like_weight(weight: &Bound<'_, PyAny>) -> PyResult<usize> {
     if let Ok(value) = weight.extract::<usize>() {
         return Ok(value);
     }
@@ -307,13 +307,11 @@ fn networkx_to_weighted_edges(
         .try_iter()?
     {
         let edge_any = edge_item?;
-        let edge_tuple = edge_any
-            .downcast::<PyTuple>()
-            .map_err(|_| {
-                PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-                    "Expected NetworkX edges(data='weight') to yield (u, v, weight) tuples",
-                )
-            })?;
+        let edge_tuple = edge_any.downcast::<PyTuple>().map_err(|_| {
+            PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                "Expected NetworkX edges(data='weight') to yield (u, v, weight) tuples",
+            )
+        })?;
         if edge_tuple.len() != 3 {
             return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
                 "Expected NetworkX edges(data='weight') to yield 3-tuples",
@@ -325,7 +323,7 @@ fn networkx_to_weighted_edges(
         let weight = edge_tuple.get_item(2)?;
         let source_idx = extract_node_index(&node_to_index, &source)?;
         let destination_idx = extract_node_index(&node_to_index, &destination)?;
-        let edge_weight = extract_non_negative_integral_weight(&weight)?;
+        let edge_weight = extract_non_negative_integer_like_weight(&weight)?;
         weighted_edges.push((source_idx, destination_idx, edge_weight));
     }
 
@@ -353,7 +351,10 @@ fn partition_to_python_communities<P: NodePartitioning>(
         communities.push((min_index, community.into_any().unbind()));
     }
     communities.sort_by_key(|(min_index, _)| *min_index);
-    Ok(communities.into_iter().map(|(_, community)| community).collect())
+    Ok(communities
+        .into_iter()
+        .map(|(_, community)| community)
+        .collect())
 }
 
 /// Build merge-threshold options from mutually exclusive absolute/relative parameters.
@@ -376,7 +377,8 @@ fn get_merge_threshold(
 
 /// Run Fast Label Propagation on an already constructed unweighted/`u8` graph.
 fn run_flp_core(graph: &Graph<u8>, epochs: u64) -> FastNodePartitioning {
-    let node_partition = FastNodePartitioning::initialize_with_singlet_partitions(graph.get_num_nodes());
+    let node_partition =
+        FastNodePartitioning::initialize_with_singlet_partitions(graph.get_num_nodes());
     let assignment_strategy: &dyn AssignmentStrategy<_> = &DefaultAssignmentStrategy;
     fast_label_propagation(graph, epochs, assignment_strategy, node_partition)
 }
@@ -395,7 +397,9 @@ fn build_leiden_partition(
     if let Some(node_partition_map) = partition {
         if let Some(mismatch_err) = mismatch_err {
             if node_partition_map.len() != node_count {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(mismatch_err));
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    mismatch_err,
+                ));
             }
         }
         Ok(LeidenNodePartitioning::initialize_from_partitions(
@@ -426,9 +430,11 @@ fn run_leiden_core(
     merge_threshold: Option<ThresholdOptions>,
     partition_mismatch_err: Option<&'static str>,
 ) -> PyResult<(FastNodePartitioning, f64)> {
-    let partition = build_leiden_partition(partition, graph.get_num_nodes(), partition_mismatch_err)?;
+    let partition =
+        build_leiden_partition(partition, graph.get_num_nodes(), partition_mismatch_err)?;
     let quality_function = Modularity::new(resolution, graph.get_total_edge_weight());
-    let mut wp_graph = WeightedPartitionedGraph::new(graph, partition, quality_function, None, seed);
+    let mut wp_graph =
+        WeightedPartitionedGraph::new(graph, partition, quality_function, None, seed);
     leiden(&mut wp_graph, randomness, max_iteration, merge_threshold);
 
     let node_partition =
