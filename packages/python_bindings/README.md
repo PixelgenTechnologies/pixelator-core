@@ -1,4 +1,4 @@
-# pixelator_core_py
+# `pixelator_core` Python Bindings
 
 [![Python versions](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://github.com/PixelgenTechnologies/pixelator-core/actions/workflows/wheels.yml)
 
@@ -13,7 +13,7 @@ statistics and community detection algorithms for fast execution from Python.
   - Leiden
   - Hybrid FLP + Leiden flow (`run_hybrid_community_detection`)
 
-> NB: for the sake of memory efficiency, all these bindings read and write the data from and to parquet files.
+> NB: parquet-backed APIs are kept for memory-efficient workflows; dedicated NetworkX APIs are available for in-memory graphs.
 
 ## Requirements
 
@@ -44,13 +44,15 @@ maturin build --release --out dist/
 pip install dist/*.whl
 ```
 
-## Quickstart
+## Quick Start
 
 ```python
 from pixelator_core import (
     find_graph_statistics,
     run_label_propagation,
+    run_label_propagation_networkx,
     run_leiden,
+    run_leiden_networkx,
     run_hybrid_community_detection,
 )
 
@@ -80,9 +82,43 @@ print("Filtered edge list written to:", output_file)
 print("Pre recovery nodes:", pre_recovery_stats.node_count)
 ```
 
+### NetworkX in-memory usage
+
+```python
+import networkx as nx
+from pixelator_core import run_label_propagation_networkx, run_leiden_networkx
+
+G = nx.Graph()
+G.add_edge("cell_a", "cell_b", weight=2)
+G.add_edge("cell_b", "cell_c")
+G.add_node("isolated_cell")
+
+flp_communities = run_label_propagation_networkx(G, epochs=2)
+leiden_communities = run_leiden_networkx(
+    G,
+    resolution=1.0,
+    randomness=0.1,
+    seed=42,
+)
+
+# Both return:
+# A list of disjoint sets (partition of G). Each set represents one community.
+# All communities together contain all the nodes in G.
+print(flp_communities)
+print(leiden_communities)
+```
+
+Weight constraints for NetworkX APIs:
+- `run_leiden_networkx` accepts non-negative integer-like weights (`1`, `2.0`) and rejects fractional weights (for example `0.5`).
+- `run_label_propagation_networkx` uses the same non-negative integer-like requirement and also requires weights to fit in `u8` (`0..=255`).
+
 ## Input and Output
 
-- Input is expected to be an edge-list Parquet file compatible with `pixelator-core`.
+- `find_graph_statistics`, `run_label_propagation`, `run_leiden`, and `run_hybrid_community_detection`
+  expect an edge-list Parquet file compatible with `pixelator-core`.
+- `run_label_propagation_networkx` and `run_leiden_networkx` accept a `networkx.Graph` object
+  and return communities in-memory as a list of disjoint sets over original node labels.
+- NetworkX edge weights for Leiden/FLP must be non-negative integer-like values; FLP additionally enforces the `u8` range (`0..=255`).
 - `run_label_propagation` and `run_leiden` produce node-partition Parquet outputs.
 - `run_hybrid_community_detection` produces a filtered edge-list Parquet output.
 - Output paths are optional; defaults are used when omitted.
