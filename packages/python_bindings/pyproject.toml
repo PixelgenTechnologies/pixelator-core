@@ -7,7 +7,7 @@ readme = "README.md"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<9", "pyarrow>=14", "maturin>=1,<2"]
+dev = ["pytest>=8,<9", "pyarrow>=14", "maturin>=1,<2", "networkx>=3,<4"]
 
 [tool.maturin]
 module-name = "pixelator_core"
@@ -15,3 +15,8 @@ module-name = "pixelator_core"
 [build-system]
 requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.2.0",
+]

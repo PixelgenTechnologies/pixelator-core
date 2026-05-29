@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Expose merge threshold in python bindings. This makes it possible to merge
   communities when they share many edges together after Leiden.
+- Add NetworkX community detection bindings. This makes it possible to use pixelator-core
+  with NetworkX graphs.
 
 ### Changed
 
