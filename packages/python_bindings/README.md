@@ -80,7 +80,7 @@ print("Pre recovery nodes:", pre_recovery_stats.node_count)
 
 ### NetworkX usage
 
-NetworkX APIs are provided for easy of use, for scenarios when the lowest possible
+NetworkX APIs are provided for ease of use, for scenarios when the lowest possible
 memory usage is not a priority.
 
 ```python
