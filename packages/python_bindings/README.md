@@ -13,7 +13,7 @@ statistics and community detection algorithms for fast execution from Python.
   - Leiden
   - Hybrid FLP + Leiden flow (`run_hybrid_community_detection`)
 
-> NB: There are two main types of APIs provided by this package: parquet-backed APIs workflows where
+> NB: There are two main types of APIs provided by this package: parquet-backed APIs for workflows where
 > memory-efficiency is a high priority and dedicated NetworkX APIs for in-memory graphs.
 
 ## Requirements
