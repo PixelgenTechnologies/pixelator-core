@@ -49,11 +49,6 @@ pip install dist/*.whl
 
 ```python
 from pixelator_core import (
-    find_graph_statistics,
-    run_label_propagation,
-    run_label_propagation_networkx,
-    run_leiden,
-    run_leiden_networkx,
     run_hybrid_community_detection,
 )
 
