@@ -272,6 +272,11 @@ fn extract_non_negative_integer_like_weight(weight: &Bound<'_, PyAny>) -> PyResu
     ))
 }
 
+type NetworkxNodeLabels = Vec<Py<PyAny>>;
+type NetworkxWeightedEdge = (usize, usize, usize);
+type NetworkxWeightedEdges = Vec<NetworkxWeightedEdge>;
+type NetworkxWeightedGraph = (NetworkxNodeLabels, NetworkxWeightedEdges);
+
 /// Convert a NetworkX graph-like Python object to indexed node labels and weighted edges.
 ///
 /// The returned tuple contains:
@@ -283,9 +288,7 @@ fn extract_non_negative_integer_like_weight(weight: &Bound<'_, PyAny>) -> PyResu
 /// # Errors
 /// Returns `TypeError` when the graph shape is invalid, edges are malformed, node labels are
 /// inconsistent, or weights fail validation.
-fn networkx_to_weighted_edges(
-    graph: &Bound<'_, PyAny>,
-) -> PyResult<(Vec<Py<PyAny>>, Vec<(usize, usize, usize)>)> {
+fn networkx_to_weighted_edges(graph: &Bound<'_, PyAny>) -> PyResult<NetworkxWeightedGraph> {
     validate_networkx_graph(graph)?;
     let py = graph.py();
 
