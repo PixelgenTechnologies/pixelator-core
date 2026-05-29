@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780055040771,
+  "lastUpdate": 1780056232210,
   "repoUrl": "https://github.com/PixelgenTechnologies/pixelator-core",
   "entries": {
     "Native Community Detection Benchmark": [
@@ -2349,6 +2349,56 @@ window.BENCHMARK_DATA = {
           {
             "name": "bench_parquet_writing",
             "value": 0.5067,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "PixelgenTechnologies",
+            "username": "PixelgenTechnologies"
+          },
+          "committer": {
+            "name": "PixelgenTechnologies",
+            "username": "PixelgenTechnologies"
+          },
+          "id": "0e095202ca93f07bebc309ba2a655c71196f5630",
+          "message": "Add networkx style API to python bindings",
+          "timestamp": "2026-04-24T12:29:49Z",
+          "url": "https://github.com/PixelgenTechnologies/pixelator-core/pull/14/commits/0e095202ca93f07bebc309ba2a655c71196f5630"
+        },
+        "date": 1780056229280,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "bench_fast_label_propagation",
+            "value": 0.00621,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity",
+            "value": 0.02714,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity_medium",
+            "value": 13.94,
+            "unit": "s"
+          },
+          {
+            "name": "bench_create_graph_from_parquet",
+            "value": 1.728,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_reading",
+            "value": 0.436,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_writing",
+            "value": 0.5033,
             "unit": "s"
           }
         ]
