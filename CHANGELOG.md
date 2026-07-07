@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Expose merge threshold in python bindings. This makes it possible to merge
   communities when they share many edges together after Leiden.
+- Expose `run_connected_components` in python bindings, making it possible to
+  find connected components of a graph directly from Python.
 
 ### Changed
 

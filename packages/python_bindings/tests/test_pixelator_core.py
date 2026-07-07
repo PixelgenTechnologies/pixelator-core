@@ -23,6 +23,7 @@ def small_parquet_path() -> str:
 def test_public_api() -> None:
     for name in (
         "find_graph_statistics",
+        "run_connected_components",
         "run_label_propagation",
         "run_leiden",
         "run_hybrid_community_detection",
@@ -122,6 +123,18 @@ def test_run_leiden_with_both_merge_thresholds_raises(
             merge_edge_threshold=10,
             merge_edge_threshold_relative=0.1,
         )
+
+
+def test_run_connected_components(small_parquet_path: str, tmp_path: Path) -> None:
+    n_nodes, _, n_components, _ = pixelator_core.find_graph_statistics(small_parquet_path)
+    out = tmp_path / "connected_components.parquet"
+    n_partitions = pixelator_core.run_connected_components(
+        small_parquet_path,
+        output=str(out),
+    )
+    assert out.is_file()
+    assert n_partitions == n_components
+    assert pq.read_metadata(out).num_rows == n_nodes
 
 
 def test_run_label_propagation(small_parquet_path: str, tmp_path: Path) -> None:
