@@ -36,6 +36,9 @@ mod pixelator_core_py {
     use super::find_graph_statistics;
 
     #[pymodule_export]
+    use super::run_connected_components;
+
+    #[pymodule_export]
     use super::run_label_propagation;
 
     #[pymodule_export]
@@ -203,6 +206,39 @@ pub fn run_hybrid_community_detection(
         PyGraphProperties::from(post_flp_properties),
         PyGraphProperties::from(post_recovery_properties),
     ))
+}
+
+/// Finds the connected components of a graph.
+///
+/// # Arguments
+/// * `parquet_file` - Path to the Parquet file containing the edge list.
+/// * `output` - Path to the output parquet file. Default is `node_partitions.parquet`.
+///
+/// # Returns
+/// * The number of connected components found.
+///
+/// The node partitioning (one partition per connected component) is written in a Parquet
+/// file as specified by the `output` parameter.
+#[pyfunction(signature = (
+    parquet_file,
+    output="node_partitions.parquet"
+))]
+pub fn run_connected_components(parquet_file: &str, output: &str) -> PyResult<usize> {
+    let (umi_mapping, graph) = create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
+
+    let mut node_to_component = vec![0usize; graph.get_num_nodes()];
+    for (component_id, component) in graph.connected_components().enumerate() {
+        for node in component {
+            node_to_component[node] = component_id;
+        }
+    }
+
+    let node_partition = FastNodePartitioning::initialize_from_partitions(node_to_component);
+
+    write_node_partitions_to_parquet(output, &node_partition, &umi_mapping, None)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{:?}", e)))?;
+
+    Ok(node_partition.num_partitions())
 }
 
 /// Finds community partitioning using the Fast Label Propagation (FLP) algorithm.

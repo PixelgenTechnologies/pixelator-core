@@ -8,6 +8,7 @@ statistics and community detection algorithms for fast execution from Python.
 ## Features
 
 - Compute graph-level statistics.
+- Find connected components (`run_connected_components`).
 - Run community detection with:
   - Fast Label Propagation (FLP)
   - Leiden
@@ -49,6 +50,7 @@ pip install dist/*.whl
 ```python
 from pixelator_core import (
     find_graph_statistics,
+    run_connected_components,
     run_label_propagation,
     run_leiden,
     run_hybrid_community_detection,
@@ -60,7 +62,14 @@ parquet_file = "./edgelist.parquet"
 n_nodes, n_edges, n_components, frac_lcc = find_graph_statistics(parquet_file)
 print(n_nodes, n_edges, n_components, frac_lcc)
 
-# 2) Run hybrid graph workflow and write filtered edge list
+# 2) Find connected components and write node partitions
+n_partitions = run_connected_components(
+    parquet_file,
+    output="./connected_components.parquet",
+)
+print("Connected components found:", n_partitions)
+
+# 3) Run hybrid graph workflow and write filtered edge list
 (
     output_file,
     pre_recovery_stats,
@@ -83,7 +92,8 @@ print("Pre recovery nodes:", pre_recovery_stats.node_count)
 ## Input and Output
 
 - Input is expected to be an edge-list Parquet file compatible with `pixelator-core`.
-- `run_label_propagation` and `run_leiden` produce node-partition Parquet outputs.
+- `run_connected_components`, `run_label_propagation`, and `run_leiden` produce
+  node-partition Parquet outputs.
 - `run_hybrid_community_detection` produces a filtered edge-list Parquet output.
 - Output paths are optional; defaults are used when omitted.
 
