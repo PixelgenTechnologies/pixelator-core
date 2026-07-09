@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Make it possible to configure arrow writer when writing batch records to parquet.
+
 ### Deprecated
 
 ### Removed
