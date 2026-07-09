@@ -105,6 +105,10 @@ impl ExactSizeIterator for ParquetUMIPairIter {
     }
 }
 
+/// Write an iterator of record batches to a parquet file at the given path.
+///
+/// The `properties` argument configures the underlying parquet writer (e.g.
+/// compression); pass `None` to use the writer's defaults.
 pub fn write_record_batches_to_path<P: AsRef<Path>, I>(
     path: P,
     schema: SchemaRef,
