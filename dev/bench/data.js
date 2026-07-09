@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783605977885,
+  "lastUpdate": 1783608877993,
   "repoUrl": "https://github.com/PixelgenTechnologies/pixelator-core",
   "entries": {
     "Native Community Detection Benchmark": [
@@ -2653,6 +2653,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "bench_parquet_writing",
             "value": 0.5304,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "adrien.coulier@pixelgen.com",
+            "name": "Adrien Coulier",
+            "username": "Aratz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a3a0b4eb1d45ecc61fe255521cb51a168e6139c1",
+          "message": "Merge pull request #16 from PixelgenTechnologies/add_writer_config\n\nMake it possible to configure arrow writer",
+          "timestamp": "2026-07-09T16:48:40+02:00",
+          "tree_id": "3a426deb710d8046b94c33061f5a8e3b28071e72",
+          "url": "https://github.com/PixelgenTechnologies/pixelator-core/commit/a3a0b4eb1d45ecc61fe255521cb51a168e6139c1"
+        },
+        "date": 1783608876849,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "bench_fast_label_propagation",
+            "value": 0.005936,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity",
+            "value": 0.03131,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity_medium",
+            "value": 18.84,
+            "unit": "s"
+          },
+          {
+            "name": "bench_create_graph_from_parquet",
+            "value": 1.846,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_reading",
+            "value": 0.4757,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_writing",
+            "value": 0.5274,
             "unit": "s"
           }
         ]
