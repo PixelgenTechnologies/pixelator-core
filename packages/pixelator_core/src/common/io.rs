@@ -10,6 +10,7 @@ use itertools::Itertools;
 use log::info;
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
+use parquet::file::properties::WriterProperties;
 
 use crate::common::graph::Graph;
 use crate::common::node_indexing::UmiToNodeIndexMapping;
@@ -108,12 +109,13 @@ pub fn write_record_batches_to_path<P: AsRef<Path>, I>(
     path: P,
     schema: SchemaRef,
     record_batches: I,
+    properties: Option<WriterProperties>,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     I: Iterator<Item = RecordBatch>,
 {
     let file = File::create(path)?;
-    let mut writer = ArrowWriter::try_new(file, schema, None)?;
+    let mut writer = ArrowWriter::try_new(file, schema, properties)?;
 
     for batch in record_batches {
         writer.write(&batch)?;
@@ -249,7 +251,7 @@ where
             .expect("Failed to build record batch")
     });
 
-    write_record_batches_to_path(path, schema.clone(), record_batches)
+    write_record_batches_to_path(path, schema.clone(), record_batches, None)
 }
 
 pub fn create_graph_and_umi_mapping_from_parquet_file<T>(
