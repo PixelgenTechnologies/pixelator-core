@@ -288,6 +288,7 @@ mod tests {
     use crate::common::node_partitioning::FastNodePartitioning;
     use crate::common::types::PartitionId;
     use itertools::izip;
+    use parquet::basic::Compression;
     use tempfile::NamedTempFile;
 
     #[test]
@@ -358,6 +359,100 @@ mod tests {
                     |(umi1, umi2, component)| (umi1 % 4).to_string() == component
                         && (umi2 % 4).to_string() == component
                 )
+        );
+    }
+
+    #[test]
+    fn test_write_record_batches_to_path() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::UInt64,
+            false,
+        )]));
+
+        let batches = vec![
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(UInt64Array::from(vec![1, 2, 3]))],
+            )
+            .unwrap(),
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(UInt64Array::from(vec![4, 5]))],
+            )
+            .unwrap(),
+        ];
+
+        let output_file = NamedTempFile::new().expect("Failed to create tmp file");
+
+        write_record_batches_to_path(
+            output_file.path(),
+            schema.clone(),
+            batches.into_iter(),
+            None,
+        )
+        .expect("Failed to write record batches");
+
+        let temp_file = std::fs::File::open(output_file.path()).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(temp_file)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let values = reader
+            .flat_map(|batch| {
+                batch
+                    .unwrap()
+                    .column_by_name("value")
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.unwrap())
+                    .collect::<Vec<u64>>()
+            })
+            .collect::<Vec<u64>>();
+
+        assert_eq!(values, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_write_record_batches_to_path_uses_properties() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::UInt64,
+            false,
+        )]));
+
+        let batches = vec![
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(UInt64Array::from(vec![1, 2, 3]))],
+            )
+            .unwrap(),
+        ];
+
+        let properties = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+
+        let output_file = NamedTempFile::new().expect("Failed to create tmp file");
+
+        write_record_batches_to_path(
+            output_file.path(),
+            schema.clone(),
+            batches.into_iter(),
+            Some(properties),
+        )
+        .expect("Failed to write record batches");
+
+        let temp_file = std::fs::File::open(output_file.path()).unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(temp_file).unwrap();
+
+        assert_eq!(
+            builder.metadata().row_group(0).column(0).compression(),
+            Compression::SNAPPY,
         );
     }
 }
