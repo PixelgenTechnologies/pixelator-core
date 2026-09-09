@@ -10,23 +10,27 @@ pub struct UmiToNodeIndexMapping {
 }
 
 impl UmiToNodeIndexMapping {
-    pub fn from_umi_pairs(umi_pairs: &[UMIPair]) -> Self {
+    pub fn from_umi_pairs<I>(umi_pairs: I) -> Self
+    where
+        I: IntoIterator<Item = UMIPair>,
+    {
+        let umi_pairs = umi_pairs.into_iter();
         // We can make a guess about the number of unique UMIs based on the
         // number of pairs to improve performance when allocating
-        let unique_umi_ratio_guesss = umi_pairs.len() / 5;
-        let mut node_idx_to_umi: Vec<NodeIdx> = Vec::with_capacity(unique_umi_ratio_guesss);
+        let unique_umi_ratio_guess = umi_pairs.size_hint().0 / 5;
+        let mut node_idx_to_umi: Vec<NodeIdx> = Vec::with_capacity(unique_umi_ratio_guess);
         let mut umi_to_node_idx: HashMap<UMI, NodeIdx> =
-            HashMap::with_capacity_and_hasher(unique_umi_ratio_guesss, Default::default());
+            HashMap::with_capacity_and_hasher(unique_umi_ratio_guess, Default::default());
 
-        for (src, dest) in umi_pairs.iter() {
-            if let Entry::Vacant(e) = umi_to_node_idx.entry(*src) {
+        for (src, dest) in umi_pairs {
+            if let Entry::Vacant(e) = umi_to_node_idx.entry(src) {
                 e.insert(node_idx_to_umi.len());
-                node_idx_to_umi.push(*src);
+                node_idx_to_umi.push(src);
             }
 
-            if let Entry::Vacant(e) = umi_to_node_idx.entry(*dest) {
+            if let Entry::Vacant(e) = umi_to_node_idx.entry(dest) {
                 e.insert(node_idx_to_umi.len());
-                node_idx_to_umi.push(*dest);
+                node_idx_to_umi.push(dest);
             }
         }
 
@@ -86,8 +90,8 @@ mod tests {
     #[test]
     fn test_umi_to_node_index_mapping_roundtrip() {
         // Create dummy umi pairs
-        let umis = vec![(11, 22), (22, 33), (33, 11)];
-        let mapping = UmiToNodeIndexMapping::from_umi_pairs(&umis);
+        let umis = [(11, 22), (22, 33), (33, 11)];
+        let mapping = UmiToNodeIndexMapping::from_umi_pairs(umis.iter().copied());
         // Check number of nodes
         assert_eq!(mapping.get_num_of_nodes(), 3);
 
