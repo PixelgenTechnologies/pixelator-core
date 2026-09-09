@@ -297,6 +297,9 @@ where
 
     triplets.sort_unstable_by_key(|&(u, v, _)| (u, v));
 
+    // Compact sorted triplets in place: equal `(u, v)` keys are adjacent, so one
+    // linear pass can sum their weights onto the first of each run. Mutating the
+    // same Vec avoids a second undirected buffer at peak construction memory.
     let mut write = 0;
     for read in 1..triplets.len() {
         if triplets[read].0 == triplets[write].0 && triplets[read].1 == triplets[write].1 {
@@ -306,6 +309,8 @@ where
             triplets[write] = triplets[read];
         }
     }
+    // Empty input never enters the loop (`write` stays 0); `truncate(1)` would
+    // invent a slot.
     if !triplets.is_empty() {
         triplets.truncate(write + 1);
     }
