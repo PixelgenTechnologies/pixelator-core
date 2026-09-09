@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788952371554,
+  "lastUpdate": 1788953954191,
   "repoUrl": "https://github.com/PixelgenTechnologies/pixelator-core",
   "entries": {
     "Native Community Detection Benchmark": [
@@ -2757,6 +2757,56 @@ window.BENCHMARK_DATA = {
           {
             "name": "bench_parquet_writing",
             "value": 0.5122000000000001,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "PixelgenTechnologies",
+            "username": "PixelgenTechnologies"
+          },
+          "committer": {
+            "name": "PixelgenTechnologies",
+            "username": "PixelgenTechnologies"
+          },
+          "id": "e5f1d3eaf8c26a1e1ab1b404de1d82b80aa1132f",
+          "message": "Plan: lower peak memory during graph construction",
+          "timestamp": "2026-08-20T17:41:45Z",
+          "url": "https://github.com/PixelgenTechnologies/pixelator-core/pull/18/commits/e5f1d3eaf8c26a1e1ab1b404de1d82b80aa1132f"
+        },
+        "date": 1788953952348,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "bench_fast_label_propagation",
+            "value": 0.005868000000000001,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity",
+            "value": 0.03022,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity_medium",
+            "value": 16.38,
+            "unit": "s"
+          },
+          {
+            "name": "bench_create_graph_from_parquet",
+            "value": 1.831,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_reading",
+            "value": 0.4394,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_writing",
+            "value": 0.5214,
             "unit": "s"
           }
         ]
