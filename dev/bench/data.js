@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783608877993,
+  "lastUpdate": 1788952371554,
   "repoUrl": "https://github.com/PixelgenTechnologies/pixelator-core",
   "entries": {
     "Native Community Detection Benchmark": [
@@ -2707,6 +2707,56 @@ window.BENCHMARK_DATA = {
           {
             "name": "bench_parquet_writing",
             "value": 0.5274,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "PixelgenTechnologies",
+            "username": "PixelgenTechnologies"
+          },
+          "committer": {
+            "name": "PixelgenTechnologies",
+            "username": "PixelgenTechnologies"
+          },
+          "id": "dd520d461352c0ef624283950d764b67a5c03644",
+          "message": "Add Cloud Agent development environment configuration",
+          "timestamp": "2026-08-20T17:41:45Z",
+          "url": "https://github.com/PixelgenTechnologies/pixelator-core/pull/17/commits/dd520d461352c0ef624283950d764b67a5c03644"
+        },
+        "date": 1788952368480,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "bench_fast_label_propagation",
+            "value": 0.005882,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity",
+            "value": 0.02723,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity_medium",
+            "value": 18.72,
+            "unit": "s"
+          },
+          {
+            "name": "bench_create_graph_from_parquet",
+            "value": 1.891,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_reading",
+            "value": 0.47200000000000003,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_writing",
+            "value": 0.5122000000000001,
             "unit": "s"
           }
         ]
