@@ -283,37 +283,28 @@ where
     T: EdgeWeight,
     I: Iterator<Item = Edge<T>>,
 {
-    let (lower, upper) = edges.size_hint();
-    let mut triplets = Vec::with_capacity(upper.unwrap_or(lower));
-
-    for Edge { src, dest, weight } in edges {
-        let (u, v) = if src <= dest {
-            (src, dest)
-        } else {
-            (dest, src)
-        };
-        triplets.push((u, v, weight));
-    }
+    let mut triplets: Vec<_> = edges
+        .map(|Edge { src, dest, weight }| {
+            if src <= dest {
+                (src, dest, weight)
+            } else {
+                (dest, src, weight)
+            }
+        })
+        .collect();
 
     triplets.sort_unstable_by_key(|&(u, v, _)| (u, v));
 
-    // Compact sorted triplets in place: equal `(u, v)` keys are adjacent, so one
-    // linear pass can sum their weights onto the first of each run. Mutating the
-    // same Vec avoids a second undirected buffer at peak construction memory.
-    let mut write = 0;
-    for read in 1..triplets.len() {
-        if triplets[read].0 == triplets[write].0 && triplets[read].1 == triplets[write].1 {
-            triplets[write].2 = triplets[write].2 + triplets[read].2;
+    // Merge duplicate undirected pairs in place (adjacent after sort) by summing
+    // weights. This avoids a second undirected buffer at peak construction memory.
+    triplets.dedup_by(|later, earlier| {
+        if later.0 == earlier.0 && later.1 == earlier.1 {
+            earlier.2 = earlier.2 + later.2;
+            true
         } else {
-            write += 1;
-            triplets[write] = triplets[read];
+            false
         }
-    }
-    // Empty input never enters the loop (`write` stays 0); `truncate(1)` would
-    // invent a slot.
-    if !triplets.is_empty() {
-        triplets.truncate(write + 1);
-    }
+    });
 
     let mut row_nnz = vec![0usize; num_nodes];
     for &(u, v, _) in &triplets {
@@ -323,15 +314,22 @@ where
         }
     }
 
-    let mut indptr = Vec::with_capacity(num_nodes + 1);
-    indptr.push(0);
-    for &nnz in &row_nnz {
-        indptr.push(indptr.last().copied().unwrap() + nnz);
+    // Exclusive prefix sums become per-row write heads (`next`); copy them into
+    // `indptr` so we do not keep a third n-vector.
+    let mut current_offset = 0;
+    for count in &mut row_nnz {
+        let nnz = *count;
+        *count = current_offset;
+        current_offset += nnz;
     }
-    let nnz = *indptr.last().unwrap_or(&0);
+    let mut next = row_nnz;
+    let nnz = current_offset;
+
+    let mut indptr = Vec::with_capacity(num_nodes + 1);
+    indptr.extend_from_slice(&next);
+    indptr.push(nnz);
     let mut indices = vec![0usize; nnz];
     let mut data = vec![T::zero(); nnz];
-    let mut next = indptr[..num_nodes].to_vec();
 
     for (u, v, weight) in triplets {
         let i = next[u];

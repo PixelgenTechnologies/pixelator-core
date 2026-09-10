@@ -99,16 +99,12 @@ impl Iterator for ParquetUMIPairIter {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let len = self.len();
+        let len = self.expected_size as usize;
         (len, Some(len))
     }
 }
 
-impl ExactSizeIterator for ParquetUMIPairIter {
-    fn len(&self) -> usize {
-        self.expected_size as usize
-    }
-}
+impl ExactSizeIterator for ParquetUMIPairIter {}
 
 /// Write an iterator of record batches to a parquet file at the given path.
 ///
