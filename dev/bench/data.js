@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789052798769,
+  "lastUpdate": 1789115514373,
   "repoUrl": "https://github.com/PixelgenTechnologies/pixelator-core",
   "entries": {
     "Native Community Detection Benchmark": [
@@ -2957,6 +2957,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "bench_parquet_writing",
             "value": 1.986,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "johan.dahlberg@pixelgen.com",
+            "name": "Johan Dahlberg",
+            "username": "johandahlberg"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a7b004bec4d8f255bf0ec0f95b46d448a04390d7",
+          "message": "Merge pull request #19 from PixelgenTechnologies/cursor/lower-peak-graph-memory-b5c3\n\nReduce graph construction peak memory",
+          "timestamp": "2026-09-11T10:26:20+02:00",
+          "tree_id": "7593bcd7bccafceb028da625bc9114f5588af4f7",
+          "url": "https://github.com/PixelgenTechnologies/pixelator-core/commit/a7b004bec4d8f255bf0ec0f95b46d448a04390d7"
+        },
+        "date": 1789115512027,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "bench_fast_label_propagation",
+            "value": 0.005667,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity",
+            "value": 0.02572,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity_medium",
+            "value": 15.1,
+            "unit": "s"
+          },
+          {
+            "name": "bench_create_graph_from_parquet",
+            "value": 1.745,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_reading",
+            "value": 0.4117,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_writing",
+            "value": 0.5011,
             "unit": "s"
           }
         ]
