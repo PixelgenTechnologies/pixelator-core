@@ -43,7 +43,7 @@ mod bench_parquet_io {
         let random_umi_pairs: Vec<(usize, usize)> = (0..n).map(|i| (i, (i + 1) % n)).collect();
 
         let node_partitioning = FastNodePartitioning::initialize_with_singlet_partitions(n);
-        let mapping = UmiToNodeIndexMapping::from_umi_pairs(&random_umi_pairs);
+        let mapping = UmiToNodeIndexMapping::from_umi_pairs(random_umi_pairs.iter().copied());
 
         bencher.bench_local(move || {
             let res = write_node_partitions_to_parquet(path, &node_partitioning, &mapping, None);

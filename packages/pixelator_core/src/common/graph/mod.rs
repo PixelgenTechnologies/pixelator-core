@@ -1,5 +1,5 @@
 use rustc_hash::FxHashSet as HashSet;
-use sprs::{CsMat, TriMat};
+use sprs::CsMat;
 use std::collections::VecDeque;
 use std::iter;
 
@@ -43,16 +43,7 @@ impl<T: EdgeWeight> Graph<T> {
     where
         I: Iterator<Item = Edge<T>>,
     {
-        let mut tri_mat = TriMat::<T>::new((num_nodes, num_nodes));
-        for Edge { src, dest, weight } in edges {
-            tri_mat.add_triplet(src, dest, weight);
-            if src != dest {
-                tri_mat.add_triplet(dest, src, weight);
-            }
-        }
-
-        let adjacency_matrix = tri_mat.to_csr();
-
+        let adjacency_matrix = csr_from_undirected_edges(edges, num_nodes);
         Self::from_adjacency_matrix(adjacency_matrix)
     }
 
@@ -280,6 +271,80 @@ impl<T: EdgeWeight> Graph<T> {
         }
         component
     }
+}
+
+/// Build a symmetric CSR adjacency matrix from an undirected edge iterator.
+///
+/// Input edges are stored once as `(min, max, weight)`, merged by summing duplicate
+/// pairs (sprs COO semantics), then expanded into both CSR directions. Self-loops
+/// are stored once. The undirected buffer is dropped before this function returns.
+fn csr_from_undirected_edges<T, I>(edges: I, num_nodes: NodeIdx) -> CsMat<T>
+where
+    T: EdgeWeight,
+    I: Iterator<Item = Edge<T>>,
+{
+    let mut triplets: Vec<_> = edges
+        .map(|Edge { src, dest, weight }| {
+            if src <= dest {
+                (src, dest, weight)
+            } else {
+                (dest, src, weight)
+            }
+        })
+        .collect();
+
+    triplets.sort_unstable_by_key(|&(u, v, _)| (u, v));
+
+    // Merge duplicate undirected pairs in place (adjacent after sort) by summing
+    // weights. This avoids a second undirected buffer at peak construction memory.
+    triplets.dedup_by(|later, earlier| {
+        if later.0 == earlier.0 && later.1 == earlier.1 {
+            earlier.2 = earlier.2 + later.2;
+            true
+        } else {
+            false
+        }
+    });
+
+    let mut row_nnz = vec![0usize; num_nodes];
+    for &(u, v, _) in &triplets {
+        row_nnz[u] += 1;
+        if u != v {
+            row_nnz[v] += 1;
+        }
+    }
+
+    // Exclusive prefix sums become per-row write heads (`next`); copy them into
+    // `indptr` so we do not keep a third n-vector.
+    let mut current_offset = 0;
+    for count in &mut row_nnz {
+        let nnz = *count;
+        *count = current_offset;
+        current_offset += nnz;
+    }
+    let mut next = row_nnz;
+    let nnz = current_offset;
+
+    let mut indptr = Vec::with_capacity(num_nodes + 1);
+    indptr.extend_from_slice(&next);
+    indptr.push(nnz);
+    let mut indices = vec![0usize; nnz];
+    let mut data = vec![T::zero(); nnz];
+
+    for (u, v, weight) in triplets {
+        let i = next[u];
+        indices[i] = v;
+        data[i] = weight;
+        next[u] += 1;
+        if u != v {
+            let j = next[v];
+            indices[j] = u;
+            data[j] = weight;
+            next[v] += 1;
+        }
+    }
+
+    CsMat::new((num_nodes, num_nodes), indptr, indices, data)
 }
 
 impl From<Graph<u8>> for Graph<usize> {

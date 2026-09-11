@@ -32,8 +32,8 @@ pub fn leiden<Q: QualityMetrics>(
         let delta = move_nodes_fast(wp_graph);
         debug!(
             "it={}, delta={}, #partitions={}, #nodes={}",
-            &it,
-            &delta,
+            it,
+            delta,
             wp_graph.get_partitioning().num_partitions(),
             wp_graph.get_graph().get_num_nodes()
         );

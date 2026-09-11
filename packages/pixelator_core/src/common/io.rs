@@ -97,13 +97,14 @@ impl Iterator for ParquetUMIPairIter {
 
         Some((src as UMI, dst as UMI))
     }
-}
 
-impl ExactSizeIterator for ParquetUMIPairIter {
-    fn len(&self) -> usize {
-        self.expected_size as usize
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.expected_size as usize;
+        (len, Some(len))
     }
 }
+
+impl ExactSizeIterator for ParquetUMIPairIter {}
 
 /// Write an iterator of record batches to a parquet file at the given path.
 ///
@@ -265,14 +266,14 @@ where
     T: EdgeWeight,
 {
     info!("Creating UMI mapping...");
-    let umi_pair_iterator =
-        ParquetUMIPairIter::new(parquet_file).expect("Failed to create ParquetUMIPairIter");
-    let umis: Vec<UMIPair> = umi_pair_iterator.collect();
-
-    let umi_mapping = UmiToNodeIndexMapping::from_umi_pairs(&umis);
+    let umi_mapping = UmiToNodeIndexMapping::from_umi_pairs(
+        ParquetUMIPairIter::new(parquet_file).expect("Failed to create ParquetUMIPairIter"),
+    );
 
     let num_nodes = umi_mapping.get_num_of_nodes();
-    let edges = umi_mapping.map_umi_pair_iterator_to_edge(umis.iter().copied());
+    let edges = umi_mapping.map_umi_pair_iterator_to_edge(
+        ParquetUMIPairIter::new(parquet_file).expect("Failed to create ParquetUMIPairIter"),
+    );
 
     info!("Creating graph...");
     let graph = Graph::<T>::from_edges(edges, num_nodes);
