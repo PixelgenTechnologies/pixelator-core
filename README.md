@@ -102,4 +102,9 @@ pixelator_core_benchmarks              fastest       │ slowest       │ media
 
 To add more benchmarks see the `packages/pixelator_core/benches/main.rs` file.
 
-The benchmarks are automatically run on each pull request and uploaded to https://pixelgentechnologies.github.io/pixelator-core/dev/bench/index.html
+Peak-heap memory for graph construction, fast label propagation, and Leiden is
+reported by Divan's `AllocProfiler` as `max alloc` on the `mem_*` benches. The
+same `cargo bench` run records those values as extra charts at
+https://pixelgentechnologies.github.io/pixelator-core/dev/bench/index.html on
+pushes to `main` and `dev`. Pull requests still run the benchmarks and comment
+the deltas, but they do not write the published history.
