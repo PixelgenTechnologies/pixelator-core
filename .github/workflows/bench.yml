@@ -44,9 +44,10 @@ jobs:
           python3 ${{ github.workspace }}/.github/scripts/divan2json.py output.txt bench_results.json
           cat bench_results.json
 
-      # Only pushes to main/dev record the published trend. Pull requests still
-      # compare against it and comment, but must not write to gh-page.
-      - name: Store benchmark results
+      # Both events fetch gh-page, compare against the recorded history, and
+      # comment. auto-push is what decides whether the new point is published,
+      # so only pushes to main/dev extend the trend.
+      - name: Store benchmark results (published on push only)
         uses: benchmark-action/github-action-benchmark@v1
         with:
           name: Native Community Detection Benchmark
@@ -54,7 +55,6 @@ jobs:
           output-file-path: ${{ github.workspace }}/bench_results.json
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: ${{ github.event_name == 'push' }}
-          save-data-file: ${{ github.event_name == 'push' }}
           gh-pages-branch: "gh-page"
           comment-always: true
           alert-threshold: "200%"
