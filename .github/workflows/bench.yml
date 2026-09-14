@@ -36,31 +36,13 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Run timing benchmarks
-        run: cargo bench --locked --bench pixelator-core-benchmarks 2>&1 | tee output.txt
+      - name: Run benchmarks
+        run: cargo bench --locked 2>&1 | tee output.txt
 
       - name: Convert divan output to json
         run: |
           python3 ${{ github.workspace }}/.github/scripts/divan2json.py output.txt bench_results.json
           cat bench_results.json
-
-      - name: Run memory benchmarks
-        run: cargo bench --locked --bench pixelator-core-memory -- --output mem_results.json
-
-      - name: Merge timing and memory json
-        run: |
-          python3 - <<'PY'
-          import json
-
-          with open("bench_results.json") as f:
-              timing = json.load(f)
-          with open("mem_results.json") as f:
-              memory = json.load(f)
-          merged = timing + memory
-          with open("bench_results.json", "w") as f:
-              json.dump(merged, f)
-          print(merged)
-          PY
 
       - name: Store benchmark results (push)
         if: github.event_name == 'push'
