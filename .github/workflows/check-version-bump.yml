@@ -16,31 +16,19 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Full history so the check can see every release tag.
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Compare Cargo.toml workspace.package.version with main base commit
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install packaging
+
+      - name: Check Cargo.toml workspace.package.version
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
-
-          get_workspace_version() {
-            python -c "
-          import sys
-          import tomllib
-          data = tomllib.loads(sys.stdin.read())
-          print(data[\"workspace\"][\"package\"][\"version\"])"
-          }
-
-          base_version="$(git show "${BASE_SHA}:Cargo.toml" | get_workspace_version)"
-          echo "base(main) version: ${base_version}"
-
-          head_version="$(get_workspace_version < Cargo.toml)"
-          echo "head(dev)  version: ${head_version}"
-
-          if [ "${head_version}" = "${base_version}" ]; then
-            echo "Error: workspace.package.version in Cargo.toml must be updated for dev -> main PRs."
-            exit 1
-          fi
+        run: python ${{ github.workspace }}/.github/scripts/check_version_bump.py
