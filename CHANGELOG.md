@@ -9,10 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Peak-heap CI benchmarks for graph construction, fast label propagation, and
-  Leiden via Divan's `AllocProfiler`, published as extra charts on the existing
-  GitHub Pages dashboard. Pull requests comment deltas only; pushes to `main`
-  and `dev` update the published history.
+- Peak-heap CI benchmarks for graph construction, fast label propagation, and Leiden.
+
+### Changed
+
+- Benchmark history is now only published from `main` and `dev` pushes.
 
 ## [0.2.0] - 2026-09-14
 
