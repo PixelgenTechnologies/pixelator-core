@@ -100,6 +100,12 @@ pixelator_core_benchmarks              fastest       │ slowest       │ media
    ╰─ bench_parquet_writing            213 ms        │ 251.5 ms      │ 224.4 ms      │ 224.9 ms      │ 10      │ 10
 ```
 
-To add more benchmarks see the `packages/pixelator_core/benches/main.rs` file.
+To add more timing benchmarks see the `packages/pixelator_core/benches/main.rs` file.
 
-The benchmarks are automatically run on each pull request and uploaded to https://pixelgentechnologies.github.io/pixelator-core/dev/bench/index.html
+Peak-heap memory for graph construction, fast label propagation, and Leiden is measured separately (one sample each, not Divan loops):
+
+```
+cargo bench --bench pixelator-core-memory
+```
+
+Timing and memory results are uploaded to https://pixelgentechnologies.github.io/pixelator-core/dev/bench/index.html on pushes to `main` and `dev`. Pull requests still run the same benchmarks and comment the deltas, but they do not write the published history.

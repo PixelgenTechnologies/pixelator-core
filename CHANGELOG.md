@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- Peak-heap CI benchmarks for graph construction, fast label propagation, and
+  Leiden, published as extra charts on the existing GitHub Pages benchmark
+  dashboard. Pull requests comment deltas only; pushes to `main` and `dev`
+  update the published history.
+
 ## [0.2.0] - 2026-09-14
 
 ### Added

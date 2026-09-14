@@ -34,3 +34,8 @@ tempfile = "3.24.0"
 name = "pixelator-core-benchmarks"
 harness = false
 path = "benches/main.rs"
+
+[[bench]]
+name = "pixelator-core-memory"
+harness = false
+path = "benches/memory.rs"
