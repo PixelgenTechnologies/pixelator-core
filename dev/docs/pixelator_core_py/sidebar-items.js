@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["find_graph_statistics","run_hybrid_community_detection","run_label_propagation","run_leiden"],"struct":["PyGraphProperties"]};
+window.SIDEBAR_ITEMS = {"fn":["find_graph_statistics","run_connected_components","run_hybrid_community_detection","run_label_propagation","run_leiden"],"struct":["PyGraphProperties"]};
