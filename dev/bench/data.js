@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789115514373,
+  "lastUpdate": 1789374201434,
   "repoUrl": "https://github.com/PixelgenTechnologies/pixelator-core",
   "entries": {
     "Native Community Detection Benchmark": [
@@ -3011,6 +3011,56 @@ window.BENCHMARK_DATA = {
           {
             "name": "bench_parquet_writing",
             "value": 0.5011,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "PixelgenTechnologies",
+            "username": "PixelgenTechnologies"
+          },
+          "committer": {
+            "name": "PixelgenTechnologies",
+            "username": "PixelgenTechnologies"
+          },
+          "id": "8a9cf0b979fa096a6119278e6364ce212f953c0c",
+          "message": "Update changelog for 0.2.0 release",
+          "timestamp": "2026-09-11T08:26:26Z",
+          "url": "https://github.com/PixelgenTechnologies/pixelator-core/pull/21/commits/8a9cf0b979fa096a6119278e6364ce212f953c0c"
+        },
+        "date": 1789374199393,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "bench_fast_label_propagation",
+            "value": 0.005644000000000001,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity",
+            "value": 0.02395,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity_medium",
+            "value": 13.64,
+            "unit": "s"
+          },
+          {
+            "name": "bench_create_graph_from_parquet",
+            "value": 1.756,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_reading",
+            "value": 0.3962,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_writing",
+            "value": 1.231,
             "unit": "s"
           }
         ]
