@@ -10,6 +10,7 @@ use itertools::Itertools;
 use log::info;
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
+use parquet::file::properties::WriterProperties;
 
 use crate::common::graph::Graph;
 use crate::common::node_indexing::UmiToNodeIndexMapping;
@@ -96,24 +97,30 @@ impl Iterator for ParquetUMIPairIter {
 
         Some((src as UMI, dst as UMI))
     }
-}
 
-impl ExactSizeIterator for ParquetUMIPairIter {
-    fn len(&self) -> usize {
-        self.expected_size as usize
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.expected_size as usize;
+        (len, Some(len))
     }
 }
 
+impl ExactSizeIterator for ParquetUMIPairIter {}
+
+/// Write an iterator of record batches to a parquet file at the given path.
+///
+/// The `properties` argument configures the underlying parquet writer (e.g.
+/// compression); pass `None` to use the writer's defaults.
 pub fn write_record_batches_to_path<P: AsRef<Path>, I>(
     path: P,
     schema: SchemaRef,
     record_batches: I,
+    properties: Option<WriterProperties>,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     I: Iterator<Item = RecordBatch>,
 {
     let file = File::create(path)?;
-    let mut writer = ArrowWriter::try_new(file, schema, None)?;
+    let mut writer = ArrowWriter::try_new(file, schema, properties)?;
 
     for batch in record_batches {
         writer.write(&batch)?;
@@ -249,7 +256,7 @@ where
             .expect("Failed to build record batch")
     });
 
-    write_record_batches_to_path(path, schema.clone(), record_batches)
+    write_record_batches_to_path(path, schema.clone(), record_batches, None)
 }
 
 pub fn create_graph_and_umi_mapping_from_parquet_file<T>(
@@ -259,14 +266,14 @@ where
     T: EdgeWeight,
 {
     info!("Creating UMI mapping...");
-    let umi_pair_iterator =
-        ParquetUMIPairIter::new(parquet_file).expect("Failed to create ParquetUMIPairIter");
-    let umis: Vec<UMIPair> = umi_pair_iterator.collect();
-
-    let umi_mapping = UmiToNodeIndexMapping::from_umi_pairs(&umis);
+    let umi_mapping = UmiToNodeIndexMapping::from_umi_pairs(
+        ParquetUMIPairIter::new(parquet_file).expect("Failed to create ParquetUMIPairIter"),
+    );
 
     let num_nodes = umi_mapping.get_num_of_nodes();
-    let edges = umi_mapping.map_umi_pair_iterator_to_edge(umis.iter().copied());
+    let edges = umi_mapping.map_umi_pair_iterator_to_edge(
+        ParquetUMIPairIter::new(parquet_file).expect("Failed to create ParquetUMIPairIter"),
+    );
 
     info!("Creating graph...");
     let graph = Graph::<T>::from_edges(edges, num_nodes);
@@ -286,6 +293,7 @@ mod tests {
     use crate::common::node_partitioning::FastNodePartitioning;
     use crate::common::types::PartitionId;
     use itertools::izip;
+    use parquet::basic::Compression;
     use tempfile::NamedTempFile;
 
     #[test]
@@ -356,6 +364,100 @@ mod tests {
                     |(umi1, umi2, component)| (umi1 % 4).to_string() == component
                         && (umi2 % 4).to_string() == component
                 )
+        );
+    }
+
+    #[test]
+    fn test_write_record_batches_to_path() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::UInt64,
+            false,
+        )]));
+
+        let batches = vec![
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(UInt64Array::from(vec![1, 2, 3]))],
+            )
+            .unwrap(),
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(UInt64Array::from(vec![4, 5]))],
+            )
+            .unwrap(),
+        ];
+
+        let output_file = NamedTempFile::new().expect("Failed to create tmp file");
+
+        write_record_batches_to_path(
+            output_file.path(),
+            schema.clone(),
+            batches.into_iter(),
+            None,
+        )
+        .expect("Failed to write record batches");
+
+        let temp_file = std::fs::File::open(output_file.path()).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(temp_file)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let values = reader
+            .flat_map(|batch| {
+                batch
+                    .unwrap()
+                    .column_by_name("value")
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.unwrap())
+                    .collect::<Vec<u64>>()
+            })
+            .collect::<Vec<u64>>();
+
+        assert_eq!(values, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_write_record_batches_to_path_uses_properties() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::UInt64,
+            false,
+        )]));
+
+        let batches = vec![
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(UInt64Array::from(vec![1, 2, 3]))],
+            )
+            .unwrap(),
+        ];
+
+        let properties = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+
+        let output_file = NamedTempFile::new().expect("Failed to create tmp file");
+
+        write_record_batches_to_path(
+            output_file.path(),
+            schema.clone(),
+            batches.into_iter(),
+            Some(properties),
+        )
+        .expect("Failed to write record batches");
+
+        let temp_file = std::fs::File::open(output_file.path()).unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(temp_file).unwrap();
+
+        assert_eq!(
+            builder.metadata().row_group(0).column(0).compression(),
+            Compression::SNAPPY,
         );
     }
 }
