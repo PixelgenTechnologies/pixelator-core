@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789375734191,
+  "lastUpdate": 1789376139474,
   "repoUrl": "https://github.com/PixelgenTechnologies/pixelator-core",
   "entries": {
     "Native Community Detection Benchmark": [
@@ -3269,6 +3269,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "bench_parquet_writing",
             "value": 0.5084,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "johan.dahlberg@pixelgen.com",
+            "name": "Johan Dahlberg",
+            "username": "johandahlberg"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d786d87ebf8c036363468f897580fcd2658fc19b",
+          "message": "Merge pull request #22 from PixelgenTechnologies/dev\n\nRelease 0.2.0",
+          "timestamp": "2026-09-14T10:50:33+02:00",
+          "tree_id": "b0d9311fe9551654606b624f4509b8a2f68e6c63",
+          "url": "https://github.com/PixelgenTechnologies/pixelator-core/commit/d786d87ebf8c036363468f897580fcd2658fc19b"
+        },
+        "date": 1789376138491,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "bench_fast_label_propagation",
+            "value": 0.005934,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity",
+            "value": 0.027899999999999998,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity_medium",
+            "value": 14.13,
+            "unit": "s"
+          },
+          {
+            "name": "bench_create_graph_from_parquet",
+            "value": 1.779,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_reading",
+            "value": 0.4167,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_writing",
+            "value": 0.5121,
             "unit": "s"
           }
         ]
