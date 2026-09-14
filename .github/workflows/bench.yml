@@ -44,30 +44,17 @@ jobs:
           python3 ${{ github.workspace }}/.github/scripts/divan2json.py output.txt bench_results.json
           cat bench_results.json
 
-      - name: Store benchmark results (push)
-        if: github.event_name == 'push'
+      # Only pushes to main/dev record the published trend. Pull requests still
+      # compare against it and comment, but must not write to gh-page.
+      - name: Store benchmark results
         uses: benchmark-action/github-action-benchmark@v1
         with:
           name: Native Community Detection Benchmark
           tool: customSmallerIsBetter
           output-file-path: ${{ github.workspace }}/bench_results.json
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: true
-          gh-pages-branch: "gh-page"
-          comment-always: true
-          alert-threshold: "200%"
-          comment-on-alert: true
-
-      - name: Store benchmark results (pull request)
-        if: github.event_name == 'pull_request'
-        uses: benchmark-action/github-action-benchmark@v1
-        with:
-          name: Native Community Detection Benchmark
-          tool: customSmallerIsBetter
-          output-file-path: ${{ github.workspace }}/bench_results.json
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: false
-          save-data-file: false
+          auto-push: ${{ github.event_name == 'push' }}
+          save-data-file: ${{ github.event_name == 'push' }}
           gh-pages-branch: "gh-page"
           comment-always: true
           alert-threshold: "200%"
