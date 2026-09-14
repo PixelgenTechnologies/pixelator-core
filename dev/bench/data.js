@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789390771187,
+  "lastUpdate": 1789391765583,
   "repoUrl": "https://github.com/PixelgenTechnologies/pixelator-core",
   "entries": {
     "Native Community Detection Benchmark": [
@@ -3565,6 +3565,75 @@ window.BENCHMARK_DATA = {
           {
             "name": "bench_parquet_writing",
             "value": 0.5106,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "adrien.coulier@pixelgen.com",
+            "name": "Adrien Coulier",
+            "username": "Aratz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1e49b6b3e67bc96096ea7121b0a375386a610761",
+          "message": "Merge pull request #24 from PixelgenTechnologies/cursor/back-merge-dev-workflow-9c4b\n\nAdd workflow to fast-forward dev after release PRs",
+          "timestamp": "2026-09-14T15:10:09+02:00",
+          "tree_id": "543f1f9f5f6a753fe7eff1f11d55757c13fec6cf",
+          "url": "https://github.com/PixelgenTechnologies/pixelator-core/commit/1e49b6b3e67bc96096ea7121b0a375386a610761"
+        },
+        "date": 1789391763755,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "bench_fast_label_propagation",
+            "value": 0.0058070000000000005,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity",
+            "value": 0.02572,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity_medium",
+            "value": 14.12,
+            "unit": "s"
+          },
+          {
+            "name": "mem_fast_label_propagation",
+            "value": 127.8877,
+            "unit": "MiB"
+          },
+          {
+            "name": "mem_graph_construction",
+            "value": 348.0911,
+            "unit": "MiB"
+          },
+          {
+            "name": "mem_leiden_modularity",
+            "value": 608.9211,
+            "unit": "MiB"
+          },
+          {
+            "name": "bench_create_graph_from_parquet",
+            "value": 1.779,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_reading",
+            "value": 0.4079,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_writing",
+            "value": 0.5045000000000001,
             "unit": "s"
           }
         ]
