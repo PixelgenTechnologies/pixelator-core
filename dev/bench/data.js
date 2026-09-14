@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789376139474,
+  "lastUpdate": 1789384883806,
   "repoUrl": "https://github.com/PixelgenTechnologies/pixelator-core",
   "entries": {
     "Native Community Detection Benchmark": [
@@ -3323,6 +3323,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "bench_parquet_writing",
             "value": 0.5121,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "johan.dahlberg@pixelgen.com",
+            "name": "Johan Dahlberg",
+            "username": "johandahlberg"
+          },
+          "committer": {
+            "email": "johan.dahlberg@pixelgen.com",
+            "name": "Johan Dahlberg",
+            "username": "johandahlberg"
+          },
+          "distinct": true,
+          "id": "eb8c79072199070d151d876117f0c62fc61e437d",
+          "message": "Update lockfile",
+          "timestamp": "2026-09-14T13:16:27+02:00",
+          "tree_id": "f22102edbdb8d1bc28feb2e5a1d544b50bec6cdc",
+          "url": "https://github.com/PixelgenTechnologies/pixelator-core/commit/eb8c79072199070d151d876117f0c62fc61e437d"
+        },
+        "date": 1789384881106,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "bench_fast_label_propagation",
+            "value": 0.004638,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity",
+            "value": 0.02054,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity_medium",
+            "value": 13.2,
+            "unit": "s"
+          },
+          {
+            "name": "bench_create_graph_from_parquet",
+            "value": 1.606,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_reading",
+            "value": 0.3533,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_writing",
+            "value": 1.128,
             "unit": "s"
           }
         ]
