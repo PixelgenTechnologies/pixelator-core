@@ -44,10 +44,12 @@ jobs:
           python3 ${{ github.workspace }}/.github/scripts/divan2json.py output.txt bench_results.json
           cat bench_results.json
 
-      # Both events fetch gh-page, compare against the recorded history, and
-      # comment. auto-push is what decides whether the new point is published,
-      # so only pushes to main/dev extend the trend.
-      - name: Store benchmark results (published on push only)
+      # Both events compare against the history recorded on gh-page, but they
+      # report it differently: a push publishes the new point silently, while a
+      # pull request leaves the comparison as a review comment without
+      # publishing. Commenting is off on push because there is no PR to comment
+      # on, so the action would scatter comments over individual commits.
+      - name: Store benchmark results (publish on push, comment on pull request)
         uses: benchmark-action/github-action-benchmark@v1
         with:
           name: Native Community Detection Benchmark
@@ -56,6 +58,6 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: ${{ github.event_name == 'push' }}
           gh-pages-branch: "gh-page"
-          comment-always: true
+          comment-always: ${{ github.event_name == 'pull_request' }}
           alert-threshold: "200%"
-          comment-on-alert: true
+          comment-on-alert: ${{ github.event_name == 'pull_request' }}
