@@ -1,0 +1,54 @@
+name: back-merge
+
+on:
+  pull_request:
+    branches: [main]
+    types: [closed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  fast-forward-dev:
+    name: Fast-forward dev to main
+    if: >
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.ref == 'dev' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fast-forward dev to main
+        run: |
+          set -euo pipefail
+
+          git fetch origin main dev
+
+          main_sha="$(git rev-parse origin/main)"
+          dev_sha="$(git rev-parse origin/dev)"
+
+          echo "origin/main: ${main_sha}"
+          echo "origin/dev:  ${dev_sha}"
+
+          if [ "${main_sha}" = "${dev_sha}" ]; then
+            echo "dev already matches main; nothing to do."
+            exit 0
+          fi
+
+          if ! git merge-base --is-ancestor origin/dev origin/main; then
+            echo "Cannot fast-forward: origin/dev is not an ancestor of origin/main."
+            echo "dev must not have unique commits that are not on main."
+            git log --oneline --left-right --max-count=50 origin/dev...origin/main
+            exit 1
+          fi
+
+          git push origin origin/main:refs/heads/dev
