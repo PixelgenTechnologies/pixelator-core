@@ -1,0 +1,4 @@
+{
+  "name": "pixelator-core",
+  "install": "bash .cursor/install.sh"
+}
