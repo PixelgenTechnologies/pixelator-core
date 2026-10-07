@@ -210,6 +210,46 @@ mod bench_community_detection {
     }
 }
 
+mod bench_connected_components {
+    use divan::Bencher;
+    use pixelator_core::common::graph::Graph;
+    use pixelator_core::common::io::create_graph_and_umi_mapping_from_parquet_file;
+    use std::hint::black_box;
+    use std::path::PathBuf;
+
+    fn load_graph() -> Graph<u8> {
+        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        path.push("test_data/mix_40cells_0pc.parquet");
+        let (_mapping, graph) = create_graph_and_umi_mapping_from_parquet_file::<u8>(
+            path.to_str().expect("Failed to convert PathBuf to &str"),
+        );
+        graph
+    }
+
+    /// Component id per node on the 40-cell mix. This is the scan used by
+    /// graph statistics and connected-component export.
+    #[divan::bench(sample_count = 10)]
+    fn bench_connected_components(bencher: Bencher) {
+        let graph = load_graph();
+        bencher.bench_local(|| black_box(graph.component_labels()));
+    }
+
+    /// Same id vector built from the hash-set component walk this scan replaced.
+    #[divan::bench(sample_count = 10)]
+    fn bench_connected_components_hashset(bencher: Bencher) {
+        let graph = load_graph();
+        bencher.bench_local(|| {
+            let mut labels = vec![0usize; graph.get_num_nodes()];
+            for (id, component) in graph.connected_components().enumerate() {
+                for node in component {
+                    labels[node] = id;
+                }
+            }
+            black_box(labels)
+        });
+    }
+}
+
 mod bench_memory {
     use divan::Bencher;
     use pixelator_core::common::io::create_graph_and_umi_mapping_from_parquet_file;
