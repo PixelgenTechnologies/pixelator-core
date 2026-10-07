@@ -88,6 +88,104 @@ impl From<PartitionedGraphStatistics> for GraphProperties {
     }
 }
 
+/// Per-community node-weight totals.
+///
+/// Partition ids produced by singlet initialization and by `normalize_partition` are dense in
+/// `0..new_partition_id`, so a `Vec` indexed by id beats hashing on the Leiden hot path. Python
+/// `run_leiden` may pass a sparse id space whose maximum is far above the node count; keep a map
+/// in that case so we do not allocate a huge zero-filled vector.
+#[derive(Clone)]
+enum PartitionWeights {
+    Dense(Vec<usize>),
+    Sparse(HashMap<PartitionId, usize>),
+}
+
+impl PartitionWeights {
+    /// Build weights from a node→partition map. Use a dense `Vec` when `new_partition_id` is
+    /// `O(num_nodes)`; otherwise keep a sparse map.
+    fn from_node_partitions(
+        node_to_partition: &[PartitionId],
+        node_weights: &[usize],
+        new_partition_id: PartitionId,
+    ) -> Self {
+        let num_nodes = node_to_partition.len();
+        // Twice the node count is still linear; a max id far above that is pathological.
+        if new_partition_id > num_nodes.saturating_mul(2).max(1) {
+            let mut weights = HashMap::<PartitionId, usize>::default();
+            for (node_id, &partition_id) in node_to_partition.iter().enumerate() {
+                weights
+                    .entry(partition_id)
+                    .and_modify(|e| *e += node_weights[node_id])
+                    .or_insert(node_weights[node_id]);
+            }
+            PartitionWeights::Sparse(weights)
+        } else {
+            let mut weights = vec![0; new_partition_id];
+            for (node_id, &partition_id) in node_to_partition.iter().enumerate() {
+                weights[partition_id] += node_weights[node_id];
+            }
+            PartitionWeights::Dense(weights)
+        }
+    }
+
+    fn singlet_from_node_weights(node_weights: &[usize]) -> Self {
+        PartitionWeights::Dense(node_weights.to_vec())
+    }
+
+    fn get(&self, partition_id: PartitionId) -> usize {
+        match self {
+            PartitionWeights::Dense(weights) => weights.get(partition_id).copied().unwrap_or(0),
+            PartitionWeights::Sparse(weights) => weights.get(&partition_id).copied().unwrap_or(0),
+        }
+    }
+
+    fn add(&mut self, partition_id: PartitionId, delta: usize) {
+        match self {
+            PartitionWeights::Dense(weights) => {
+                if partition_id >= weights.len() {
+                    weights.resize(partition_id + 1, 0);
+                }
+                weights[partition_id] += delta;
+            }
+            PartitionWeights::Sparse(weights) => {
+                weights
+                    .entry(partition_id)
+                    .and_modify(|e| *e += delta)
+                    .or_insert(delta);
+            }
+        }
+    }
+
+    fn sub(&mut self, partition_id: PartitionId, delta: usize) {
+        match self {
+            PartitionWeights::Dense(weights) => {
+                weights[partition_id] -= delta;
+            }
+            PartitionWeights::Sparse(weights) => {
+                weights.entry(partition_id).and_modify(|e| *e -= delta);
+            }
+        }
+    }
+
+    /// Remap non-empty partition ids through `partition_index`. Result is always dense.
+    fn remap_dense(&self, partition_index: &HashMap<PartitionId, PartitionId>) -> Self {
+        let mut weights = vec![0; partition_index.len()];
+        match self {
+            PartitionWeights::Dense(old) => {
+                for (&old_pid, &new_pid) in partition_index.iter() {
+                    weights[new_pid] = old.get(old_pid).copied().unwrap_or(0);
+                }
+            }
+            PartitionWeights::Sparse(old) => {
+                for (&old_pid, &new_pid) in partition_index.iter() {
+                    weights[new_pid] = old.get(&old_pid).copied().unwrap_or(0);
+                }
+            }
+        }
+        PartitionWeights::Dense(weights)
+    }
+}
+
 /// A graph with weighted nodes and a partitioning, used for Leiden community detection.
 ///
 /// In particular, it provides the `aggregate` method that makes it possible to aggregate nodes
@@ -101,7 +199,7 @@ pub struct WeightedPartitionedGraph<Q: QualityMetrics> {
     graph: Graph<usize>,
     partitions: LeidenNodePartitioning,
     node_weights: Vec<usize>,
-    partition_weights: HashMap<PartitionId, usize>,
+    partition_weights: PartitionWeights,
     quality_metrics: Q,
     /// maps from ancestor node ids to current node ids
     /// which will change as the graph is aggregated
@@ -133,13 +231,11 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
                 .collect::<Vec<usize>>()
         });
 
-        let mut partition_weights = HashMap::<PartitionId, usize>::default();
-        for (node_id, &partition_id) in partitions.get_node_to_partition_map().iter().enumerate() {
-            partition_weights
-                .entry(partition_id)
-                .and_modify(|e| *e += node_weights[node_id])
-                .or_insert(node_weights[node_id]);
-        }
+        let partition_weights = PartitionWeights::from_node_partitions(
+            partitions.get_node_to_partition_map(),
+            &node_weights,
+            partitions.get_new_partition_id(),
+        );
 
         let ancestor_map = (0..graph.get_num_nodes()).collect::<Vec<NodeIdx>>();
         let rng = StdRng::seed_from_u64(seed.unwrap_or(0));
@@ -223,13 +319,9 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
     /// - `new_partition`: The new partition id to assign to the node.
     pub fn update_partition_slow(&mut self, node: NodeIdx, new_partition: PartitionId) {
         let current_partition = self.partitions.get_partition_for_node(&node);
-        self.partition_weights
-            .entry(current_partition)
-            .and_modify(|e| *e -= self.node_weights[node]);
-        self.partition_weights
-            .entry(new_partition)
-            .and_modify(|e| *e += self.node_weights[node])
-            .or_insert(self.node_weights[node]);
+        let node_weight = self.node_weights[node];
+        self.partition_weights.sub(current_partition, node_weight);
+        self.partition_weights.add(new_partition, node_weight);
         self.partitions.update_partition(node, new_partition);
     }
 
@@ -243,13 +335,9 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
     /// The cache will need to be rebuilt once before it is needed again (e.g. aggregation/refinement).
     pub fn update_partition_fast(&mut self, node: NodeIdx, new_partition: PartitionId) {
         let current_partition = self.partitions.get_partition_for_node(&node);
-        self.partition_weights
-            .entry(current_partition)
-            .and_modify(|e| *e -= self.node_weights[node]);
-        self.partition_weights
-            .entry(new_partition)
-            .and_modify(|e| *e += self.node_weights[node])
-            .or_insert(self.node_weights[node]);
+        let node_weight = self.node_weights[node];
+        self.partition_weights.sub(current_partition, node_weight);
+        self.partition_weights.add(new_partition, node_weight);
         self.partitions.update_partition_fast(node, new_partition);
     }
 
@@ -258,9 +346,9 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
         &self.node_weights
     }
 
-    /// Get the weights of all partitions
-    pub fn get_partition_weights(&self) -> &HashMap<PartitionId, usize> {
-        &self.partition_weights
+    /// Get the total node weight of a partition
+    pub fn get_partition_weight(&self, partition_id: PartitionId) -> usize {
+        self.partition_weights.get(partition_id)
     }
 
     /// Get the mapping from ancestor nodes to their current partitions
@@ -290,17 +378,8 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
                 .collect(),
         );
 
-        self.partition_weights = self
-            .partition_weights
-            .iter()
-            .filter_map(|(pid, &weight)| {
-                if let Some(&new_pid) = partition_index.get(pid) {
-                    Some((new_pid, weight))
-                } else {
-                    None
-                }
-            })
-            .collect();
+        // After remapping, ids are dense in 0..|P|; always store as a Vec.
+        self.partition_weights = self.partition_weights.remap_dense(&partition_index);
     }
 
     /// Aggregate nodes sharing the same partition
@@ -363,23 +442,20 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
     fn refine_partitions(
         &mut self,
         randomness: f64,
-    ) -> (LeidenNodePartitioning, HashMap<PartitionId, usize>) {
+    ) -> (LeidenNodePartitioning, PartitionWeights) {
         // Reset current partitions and weights to singlet partitions
         let mut super_partitions =
             LeidenNodePartitioning::initialize_with_singlet_partitions(self.graph.get_num_nodes());
         mem::swap(&mut self.partitions, &mut super_partitions);
 
-        let mut super_partition_weights = self
-            .node_weights
-            .iter()
-            .enumerate()
-            .map(|(node_id, &weight)| (node_id, weight))
-            .collect::<HashMap<PartitionId, usize>>();
+        // Singlet: partition id equals node id, so weights are a dense copy of node_weights.
+        let mut super_partition_weights =
+            PartitionWeights::singlet_from_node_weights(&self.node_weights);
         mem::swap(&mut self.partition_weights, &mut super_partition_weights);
 
         // Group well connected nodes belonging to the same super partition
         for (id, nodes) in super_partitions.get_partition_to_node_map_ref().iter() {
-            self.merge_node_subset(nodes, super_partition_weights[id], randomness);
+            self.merge_node_subset(nodes, super_partition_weights.get(*id), randomness);
         }
 
         (super_partitions, super_partition_weights)
@@ -430,7 +506,7 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
         )
         .for_each(|(&new_pid, refined_pid, &super_pid)| {
             new_partitions[new_pid] = super_pid;
-            new_node_weights[new_pid] = self.partition_weights[refined_pid];
+            new_node_weights[new_pid] = self.partition_weights.get(*refined_pid);
         });
 
         (
@@ -513,7 +589,7 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
                 self.aggregate_edge_weights(*node, &mut aggregated_edge_weights);
 
                 let src_partition = self.partitions.get_partition_for_node(node);
-                let src_size = self.partition_weights[&src_partition];
+                let src_size = self.partition_weights.get(src_partition);
                 let src_weight = aggregated_edge_weights
                     .iter()
                     .find(|(p, _)| *p == src_partition)
@@ -538,7 +614,7 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
                                     + self.contrib_dest(
                                         node_size,
                                         total_edge_weight,
-                                        self.partition_weights[&community_id],
+                                        self.partition_weights.get(community_id),
                                     ),
                             )
                         })
@@ -588,7 +664,7 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
                 let contrib = self.contrib_dest(
                     node_size,
                     total_edge_weight,
-                    self.partition_weights[&partition],
+                    self.partition_weights.get(partition),
                 );
                 if contrib > 0.0 {
                     Some((partition, contrib))
@@ -611,7 +687,7 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
             // of this community, and its size will be 0.
             .or(Some((self.partitions.get_new_partition_id(), 0.0)))
             .map(|(id, contrib_dest)| {
-                let src_size = self.partition_weights[&src_partition];
+                let src_size = self.partition_weights.get(src_partition);
                 let src_weight = aggregated_edge_weights
                     .iter()
                     .find(|(p, _)| *p == src_partition)
@@ -629,7 +705,7 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
             .get_partition_to_node_map_ref()
             .iter()
             .map(|(&partition_id, nodes_in_partition)| {
-                let subset_size = self.partition_weights[&partition_id];
+                let subset_size = self.partition_weights.get(partition_id);
                 let edge_count_in_partition = self
                     .graph
                     .get_edges_in_selection(nodes_in_partition)
@@ -705,7 +781,7 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
                  }| weight,
             )
             .sum();
-        let dest_size = self.get_partition_weights()[&dest_partition];
+        let dest_size = self.get_partition_weight(dest_partition);
 
         let src_partition = self.partitions.get_node_to_partition_map()[node_id];
         let src_edge_total_weight: usize = self
@@ -720,7 +796,7 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
                  }| weight,
             )
             .sum();
-        let src_size = self.get_partition_weights()[&src_partition];
+        let src_size = self.get_partition_weight(src_partition);
         self.contrib_dest(node_size, dest_edge_total_weight, dest_size)
             + self.loss_src(node_size, src_edge_total_weight, src_size)
     }
@@ -786,7 +862,7 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
         supercommunity: &HashSet<NodeIdx>,
         supercommunity_size: usize,
     ) -> bool {
-        let community_size = self.partition_weights[community_id];
+        let community_size = self.partition_weights.get(*community_id);
         let nodes_in_community = &self.partitions.get_partition_to_node_map_ref()[community_id];
 
         // Check that all nodes in the community are inside the supercommunity
