@@ -52,14 +52,14 @@ mod tests {
 
         let mut wp_graph = WeightedPartitionedGraph::new(graph, partitions, quality, None, None);
 
-        assert_eq!(wp_graph.get_partition_weights()[&0], 6);
-        assert_eq!(wp_graph.get_partition_weights()[&1], 4);
+        assert_eq!(wp_graph.get_partition_weight(0), 6);
+        assert_eq!(wp_graph.get_partition_weight(1), 4);
         assert_eq!(wp_graph.delta(2, 1), -0.8);
 
         wp_graph.update_partition_slow(2, 1);
 
-        assert_eq!(wp_graph.get_partition_weights()[&0], 2);
-        assert_eq!(wp_graph.get_partition_weights()[&1], 8);
+        assert_eq!(wp_graph.get_partition_weight(0), 2);
+        assert_eq!(wp_graph.get_partition_weight(1), 8);
     }
 
     #[test]
@@ -79,14 +79,14 @@ mod tests {
         let mut wp_graph =
             WeightedPartitionedGraph::new(graph, partitions, quality, Some(node_weights), None);
 
-        assert_eq!(wp_graph.get_partition_weights()[&0], 10);
-        assert_eq!(wp_graph.get_partition_weights()[&1], 4);
+        assert_eq!(wp_graph.get_partition_weight(0), 10);
+        assert_eq!(wp_graph.get_partition_weight(1), 4);
         assert_eq!(wp_graph.delta(2, 1), -32. / 28.);
 
         wp_graph.update_partition_slow(2, 1);
 
-        assert_eq!(wp_graph.get_partition_weights()[&0], 2);
-        assert_eq!(wp_graph.get_partition_weights()[&1], 12);
+        assert_eq!(wp_graph.get_partition_weight(0), 2);
+        assert_eq!(wp_graph.get_partition_weight(1), 12);
     }
 
     #[test]
