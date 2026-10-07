@@ -232,17 +232,17 @@ impl<T: EdgeWeight> Graph<T> {
 
     /// Component id of every node, in node-index order.
     ///
-    /// Same grouping as [`Self::connected_components`]. Callers that only need ids
-    /// use this instead of building a hash set per component.
+    /// Nodes in the same component share an id. Ids start at 0. An isolated node
+    /// is its own component.
     pub fn component_labels(&self) -> Vec<usize> {
         self.component_labels_by(|_, _| true)
     }
 
-    /// [`Self::component_labels`] restricted by `filter`.
+    /// [`Self::component_labels`] on the edges accepted by `filter`.
     ///
-    /// `filter` must be transitive, as for [`Self::connected_components_by`].
-    /// Ids are assigned in increasing start-node order, matching `enumerate()` on
-    /// that iterator.
+    /// `filter` must be transitive: `filter(a, b)` and `filter(b, c)` imply
+    /// `filter(a, c)`. Each component starts at the lowest unvisited node index,
+    /// and that start order is the component id order.
     pub fn component_labels_by<F>(&self, filter: F) -> Vec<usize>
     where
         F: Fn(NodeIdx, NodeIdx) -> bool,

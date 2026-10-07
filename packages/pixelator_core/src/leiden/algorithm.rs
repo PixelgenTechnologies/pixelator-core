@@ -129,8 +129,7 @@ fn merge_highly_connected_nodes<Q: QualityMetrics>(
         }
     });
 
-    // The hash-set walk kept whichever member it iterated first. Use the lowest
-    // node index so the surviving partition is a function of the graph.
+    // Every node in a component takes the partition of that component's lowest node index.
     let n_labels = labels.iter().copied().max().map(|max| max + 1).unwrap_or(0);
     let mut representative = vec![usize::MAX; n_labels];
     for (node, &label) in labels.iter().enumerate() {

@@ -226,15 +226,14 @@ mod bench_connected_components {
         graph
     }
 
-    /// Component id per node on the 40-cell mix. This is the scan used by
-    /// graph statistics and connected-component export.
+    /// Component id of every node on the 40-cell mix.
     #[divan::bench(sample_count = 10)]
     fn bench_connected_components(bencher: Bencher) {
         let graph = load_graph();
         bencher.bench_local(|| black_box(graph.component_labels()));
     }
 
-    /// Same id vector built from the hash-set component walk this scan replaced.
+    /// Component id of every node, collected from each component set.
     #[divan::bench(sample_count = 10)]
     fn bench_connected_components_hashset(bencher: Bencher) {
         let graph = load_graph();
