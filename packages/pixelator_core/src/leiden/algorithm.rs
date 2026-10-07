@@ -120,7 +120,7 @@ fn merge_highly_connected_nodes<Q: QualityMetrics>(
     merge_threshold: ThresholdOptions,
 ) {
     let graph = wp_graph.get_graph();
-    let labels = graph.component_labels_by(|node_1, node_2| match merge_threshold {
+    let labels = graph.connected_components_by(|node_1, node_2| match merge_threshold {
         ThresholdOptions::Absolute(t) => graph.get_edge_weight(node_1, node_2).unwrap() > t,
         ThresholdOptions::Relative(rt) => {
             let node_weights = wp_graph.get_node_weights();
@@ -477,7 +477,10 @@ mod tests {
                 .connected_components_by(|node_1, node_2| result_partition
                     .get_node_to_partition_map()[node_1]
                     == result_partition.get_node_to_partition_map()[node_2])
-                .count(),
+                .into_iter()
+                .max()
+                .unwrap()
+                + 1,
             result_partition.num_partitions()
         );
     }
@@ -505,7 +508,10 @@ mod tests {
                 .connected_components_by(|node_1, node_2| result_partition
                     .get_node_to_partition_map()[node_1]
                     == result_partition.get_node_to_partition_map()[node_2])
-                .count(),
+                .into_iter()
+                .max()
+                .unwrap()
+                + 1,
             result_partition.num_partitions()
         );
     }

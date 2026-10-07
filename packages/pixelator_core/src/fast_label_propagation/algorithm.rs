@@ -95,7 +95,7 @@ where
     P: NodePartitioning,
 {
     info!("Cleaning partitions by splitting disconnected components...");
-    let labels = graph.component_labels_by(|src_node, node| {
+    let labels = graph.connected_components_by(|src_node, node| {
         node_partition.get_partition_for_node(&src_node)
             == node_partition.get_partition_for_node(&node)
     });
@@ -253,34 +253,22 @@ mod tests {
                 .connected_components_by(|node_1, node_2| result_partition
                     .get_node_to_partition_map()[node_1]
                     == result_partition.get_node_to_partition_map()[node_2])
-                .count(),
+                .into_iter()
+                .max()
+                .unwrap()
+                + 1,
             result_partition.num_partitions()
         );
     }
 
     #[test]
-    fn test_clean_partitions_matches_set_labels() {
-        use rand::Rng;
-        use rand::SeedableRng;
-        use rand::rngs::StdRng;
+    fn test_clean_partitions_splits_disconnected_partitions() {
+        // Path 0-1-2-3. Nodes 0, 1 and 3 share partition 5, but 3 is not connected to 0-1.
+        let graph = Graph::<u8>::from_edges(edges_from_tuples(vec![(0, 1), (1, 2), (2, 3)]), 4);
+        let partitioning = FastNodePartitioning::initialize_from_partitions(vec![5, 5, 6, 5]);
 
-        let graph = get_random_graph::<u8>(200, 400, 1);
-        let mut rng = StdRng::seed_from_u64(1);
-        let partition: Vec<usize> = (0..graph.get_num_nodes())
-            .map(|_| rng.random_range(0..8))
-            .collect();
-        let partitioning = FastNodePartitioning::initialize_from_partitions(partition.clone());
         let cleaned = clean_partitions(&graph, partitioning);
 
-        let mut reference = vec![0usize; graph.get_num_nodes()];
-        for (id, component) in graph
-            .connected_components_by(|src, node| partition[src] == partition[node])
-            .enumerate()
-        {
-            for node in component {
-                reference[node] = id;
-            }
-        }
-        assert_eq!(cleaned.get_node_to_partition_map(), reference.as_slice());
+        assert_eq!(cleaned.get_node_to_partition_map(), [0, 0, 1, 2].as_slice());
     }
 }
