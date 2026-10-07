@@ -439,10 +439,7 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
     ///
     /// The unrefined partitioning becomes super partitioning and is returned by this function,
     /// together with the weights of the super partitions.
-    fn refine_partitions(
-        &mut self,
-        randomness: f64,
-    ) -> (LeidenNodePartitioning, PartitionWeights) {
+    fn refine_partitions(&mut self, randomness: f64) -> (LeidenNodePartitioning, PartitionWeights) {
         // Reset current partitions and weights to singlet partitions
         let mut super_partitions =
             LeidenNodePartitioning::initialize_with_singlet_partitions(self.graph.get_num_nodes());
@@ -1349,5 +1346,28 @@ mod tests {
         assert_eq!(statistics.crossing_edge_weight_sum, 2);
         assert_eq!(partition_sizes, vec![2, 3]);
         assert_eq!(statistics.quality, 31. / 12.);
+    }
+
+    #[test]
+    fn test_sparse_partition_ids_keep_weights_across_moves() {
+        // Max id is far above the node count, so weights stay in the sparse map.
+        let edges = edges_from_tuples(vec![(0, 1)]);
+        let graph = Graph::<usize>::from_edges(edges, 2);
+        let partitions = LeidenNodePartitioning::initialize_from_partitions(vec![10_000, 10_000]);
+        let cpm = ConstantPottsModel { resolution: 0.5 };
+        let mut wp_graph =
+            WeightedPartitionedGraph::new(graph, partitions, cpm, Some(vec![3, 4]), None);
+
+        assert_eq!(wp_graph.get_partition_weight(10_000), 7);
+        assert_eq!(wp_graph.get_partition_weight(0), 0);
+
+        wp_graph.update_partition_slow(1, 20_000);
+
+        assert_eq!(wp_graph.get_partition_weight(10_000), 3);
+        assert_eq!(wp_graph.get_partition_weight(20_000), 4);
+        assert_eq!(
+            wp_graph.get_partition_weight(10_000) + wp_graph.get_partition_weight(20_000),
+            7
+        );
     }
 }
