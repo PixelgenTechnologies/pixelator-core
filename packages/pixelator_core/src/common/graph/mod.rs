@@ -47,6 +47,18 @@ impl<T: EdgeWeight> Graph<T> {
         Self::from_adjacency_matrix(adjacency_matrix)
     }
 
+    /// Build a graph from a pre-collected undirected edge buffer.
+    ///
+    /// Each triplet should already be ordered as `(min(src, dest), max(src, dest), weight)`.
+    /// Duplicate pairs are merged by summing weights inside CSR construction.
+    pub fn from_undirected_triplets(
+        triplets: Vec<(NodeIdx, NodeIdx, T)>,
+        num_nodes: NodeIdx,
+    ) -> Self {
+        let adjacency_matrix = csr_from_undirected_triplets(triplets, num_nodes);
+        Self::from_adjacency_matrix(adjacency_matrix)
+    }
+
     pub fn from_adjacency_matrix(adjacency_matrix: CsMat<T>) -> Self {
         let num_nodes = adjacency_matrix.rows();
         let edge_entry_count = adjacency_matrix
@@ -283,7 +295,7 @@ where
     T: EdgeWeight,
     I: Iterator<Item = Edge<T>>,
 {
-    let mut triplets: Vec<_> = edges
+    let triplets: Vec<_> = edges
         .map(|Edge { src, dest, weight }| {
             if src <= dest {
                 (src, dest, weight)
@@ -292,7 +304,19 @@ where
             }
         })
         .collect();
+    csr_from_undirected_triplets(triplets, num_nodes)
+}
 
+/// Finish CSR construction from an undirected `(min, max, weight)` buffer.
+///
+/// Keeps the in-place sort + dedup + scatter path used by [`csr_from_undirected_edges`].
+fn csr_from_undirected_triplets<T>(
+    mut triplets: Vec<(NodeIdx, NodeIdx, T)>,
+    num_nodes: NodeIdx,
+) -> CsMat<T>
+where
+    T: EdgeWeight,
+{
     triplets.sort_unstable_by_key(|&(u, v, _)| (u, v));
 
     // Merge duplicate undirected pairs in place (adjacent after sort) by summing

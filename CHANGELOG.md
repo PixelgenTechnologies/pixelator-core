@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Benchmark history is now only published from `main` and `dev` pushes.
+- Building a graph from a parquet edge list reads the file once. On the 40-cell mix, graph construction went from 1.65 s to 1.00 s. Peak memory is unchanged.
 
 ## [0.2.0] - 2026-09-14
 
