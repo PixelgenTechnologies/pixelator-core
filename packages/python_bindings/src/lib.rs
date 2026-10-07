@@ -226,13 +226,7 @@ pub fn run_hybrid_community_detection(
 pub fn run_connected_components(parquet_file: &str, output: &str) -> PyResult<usize> {
     let (umi_mapping, graph) = create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
 
-    let mut node_to_component = vec![0usize; graph.get_num_nodes()];
-    for (component_id, component) in graph.connected_components().enumerate() {
-        for node in component {
-            node_to_component[node] = component_id;
-        }
-    }
-
+    let node_to_component = graph.component_labels();
     let node_partition = FastNodePartitioning::initialize_from_partitions(node_to_component);
 
     write_node_partitions_to_parquet(output, &node_partition, &umi_mapping, None)

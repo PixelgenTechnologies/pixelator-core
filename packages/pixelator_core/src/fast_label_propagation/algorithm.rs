@@ -95,21 +95,11 @@ where
     P: NodePartitioning,
 {
     info!("Cleaning partitions by splitting disconnected components...");
-    let mut new_partitioning = vec![0; graph.get_num_nodes()];
-
-    for (i, component) in graph
-        .connected_components_by(|src_node, node| {
-            node_partition.get_partition_for_node(&src_node)
-                == node_partition.get_partition_for_node(&node)
-        })
-        .enumerate()
-    {
-        for node in component {
-            new_partitioning[node] = i;
-        }
-    }
-
-    P::initialize_from_partitions(new_partitioning)
+    let labels = graph.component_labels_by(|src_node, node| {
+        node_partition.get_partition_for_node(&src_node)
+            == node_partition.get_partition_for_node(&node)
+    });
+    P::initialize_from_partitions(labels)
 }
 
 #[cfg(test)]
@@ -266,5 +256,31 @@ mod tests {
                 .count(),
             result_partition.num_partitions()
         );
+    }
+
+    #[test]
+    fn test_clean_partitions_matches_set_labels() {
+        use rand::Rng;
+        use rand::SeedableRng;
+        use rand::rngs::StdRng;
+
+        let graph = get_random_graph::<u8>(200, 400, 1);
+        let mut rng = StdRng::seed_from_u64(1);
+        let partition: Vec<usize> = (0..graph.get_num_nodes())
+            .map(|_| rng.random_range(0..8))
+            .collect();
+        let partitioning = FastNodePartitioning::initialize_from_partitions(partition.clone());
+        let cleaned = clean_partitions(&graph, partitioning);
+
+        let mut reference = vec![0usize; graph.get_num_nodes()];
+        for (id, component) in graph
+            .connected_components_by(|src, node| partition[src] == partition[node])
+            .enumerate()
+        {
+            for node in component {
+                reference[node] = id;
+            }
+        }
+        assert_eq!(cleaned.get_node_to_partition_map(), reference.as_slice());
     }
 }

@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Benchmark history is now only published from `main` and `dev` pushes.
+- Component scans that only need an id per node use a label buffer instead of a hash set per component.
+- Merging highly connected communities keeps the partition of the lowest node index in each component.
 
 ## [0.2.0] - 2026-09-14
 
