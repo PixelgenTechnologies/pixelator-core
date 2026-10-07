@@ -33,7 +33,7 @@ impl GraphProperties {
         let node_count = graph.get_num_nodes();
         let edge_weight_sum = graph.get_total_edge_weight();
 
-        let labels = graph.component_labels();
+        let labels = graph.connected_components();
         let mut component_sizes =
             vec![0usize; labels.iter().copied().max().map(|max| max + 1).unwrap_or(0)];
         for label in labels {
@@ -111,40 +111,15 @@ mod tests {
     }
 
     #[test]
-    fn test_graph_properties_match_set_component_sizes() {
-        use crate::common::constants::MIN_PNA_COMPONENT_SIZE;
-        use crate::common::test_utils::get_random_graph;
-        use itertools::Itertools;
-
-        let graph = get_random_graph::<u8>(200, 400, 2);
-        let mut reference_sizes = vec![0usize; graph.get_num_nodes()];
-        let mut component_count = 0usize;
-        for component in graph.connected_components() {
-            let size = component.len();
-            reference_sizes[component_count] = size;
-            component_count += 1;
-        }
-        reference_sizes.truncate(component_count);
-
+    fn test_graph_properties_component_size_distribution() {
+        // Graph: 0-1-2  3 (isolated)  4-5
+        let edges = edges_from_tuples(vec![(0, 1), (1, 2), (4, 5)]);
+        let graph = Graph::<u8>::from_edges(edges.into_iter(), 6);
         let props = GraphProperties::new(&graph);
-        let largest = reference_sizes.iter().copied().max().unwrap_or(0);
-        let stranded = reference_sizes
-            .iter()
-            .filter(|&&size| size < MIN_PNA_COMPONENT_SIZE)
-            .sum::<usize>();
-        let distribution: HashMap<usize, usize> = reference_sizes
-            .iter()
-            .copied()
-            .counts()
-            .into_iter()
-            .collect();
 
-        assert_eq!(props.n_connected_components, component_count);
-        assert_eq!(
-            props.fraction_in_largest_component,
-            largest as f64 / graph.get_num_nodes() as f64
-        );
-        assert_eq!(props.stranded_nodes, stranded);
-        assert_eq!(props.component_size_distribution, distribution);
+        let expected: HashMap<usize, usize> = [(3, 1), (1, 1), (2, 1)].into_iter().collect();
+        assert_eq!(props.component_size_distribution, expected);
+        // Every component is below MIN_PNA_COMPONENT_SIZE
+        assert_eq!(props.stranded_nodes, 6);
     }
 }

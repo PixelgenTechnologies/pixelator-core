@@ -1,7 +1,6 @@
 use rustc_hash::FxHashSet as HashSet;
 use sprs::CsMat;
 use std::collections::VecDeque;
-use std::iter;
 
 use crate::common::types::{Edge, EdgeWeight, NodeIdx};
 
@@ -208,42 +207,20 @@ impl<T: EdgeWeight> Graph<T> {
         })
     }
 
-    /// Returns connected components of the graph
-    pub fn connected_components(&self) -> impl Iterator<Item = HashSet<NodeIdx>> {
-        self.connected_components_by(|_, _| true)
-    }
-
-    /// Returns connected components where nodes in each components fulfill the `filter` criteria.
-    ///
-    /// This criteria must be transitive, ie. filter(a, b) ∧ filter(b, c) ⇒ filter(a, c)
-    pub fn connected_components_by<F>(&self, filter: F) -> impl Iterator<Item = HashSet<NodeIdx>>
-    where
-        F: Fn(NodeIdx, NodeIdx) -> bool,
-    {
-        let mut node_queue: VecDeque<NodeIdx> = VecDeque::from_iter(0..self.get_num_nodes());
-        let mut visited: HashSet<NodeIdx> = HashSet::default();
-
-        iter::from_fn(move || {
-            let start_node = self.find_first_non_visited_node(&mut node_queue, &visited)?;
-            let component = self.breath_first_search(start_node, &mut visited, &filter);
-            Some(component)
-        })
-    }
-
-    /// Component id of every node, in node-index order.
+    /// Connected component id of every node, in node-index order.
     ///
     /// Nodes in the same component share an id. Ids start at 0. An isolated node
     /// is its own component.
-    pub fn component_labels(&self) -> Vec<usize> {
-        self.component_labels_by(|_, _| true)
+    pub fn connected_components(&self) -> Vec<usize> {
+        self.connected_components_by(|_, _| true)
     }
 
-    /// [`Self::component_labels`] on the edges accepted by `filter`.
+    /// [`Self::connected_components`] on the edges accepted by `filter`.
     ///
     /// `filter` must be transitive: `filter(a, b)` and `filter(b, c)` imply
     /// `filter(a, c)`. Each component starts at the lowest unvisited node index,
     /// and that start order is the component id order.
-    pub fn component_labels_by<F>(&self, filter: F) -> Vec<usize>
+    pub fn connected_components_by<F>(&self, filter: F) -> Vec<usize>
     where
         F: Fn(NodeIdx, NodeIdx) -> bool,
     {
@@ -272,48 +249,6 @@ impl<T: EdgeWeight> Graph<T> {
             }
         }
         labels
-    }
-
-    fn find_first_non_visited_node(
-        &self,
-        node_queue: &mut VecDeque<NodeIdx>,
-        visited: &HashSet<NodeIdx>,
-    ) -> Option<NodeIdx> {
-        while let Some(node) = node_queue.pop_front() {
-            if !visited.contains(&node) {
-                return Some(node);
-            }
-        }
-        None
-    }
-
-    fn breath_first_search<F>(
-        &self,
-        start_node: NodeIdx,
-        visited: &mut HashSet<NodeIdx>,
-        filter: &F,
-    ) -> HashSet<NodeIdx>
-    where
-        F: Fn(NodeIdx, NodeIdx) -> bool,
-    {
-        let mut component: HashSet<NodeIdx> = HashSet::default();
-        let mut node_queue = VecDeque::from(vec![start_node]);
-
-        while let Some(node) = node_queue.pop_front() {
-            if visited.contains(&node) {
-                continue;
-            }
-            visited.insert(node);
-            component.insert(node);
-
-            for neighbor in self.neighbors(node) {
-                if visited.contains(&neighbor) || !filter(node, neighbor) {
-                    continue;
-                }
-                node_queue.push_back(neighbor);
-            }
-        }
-        component
     }
 }
 
@@ -610,18 +545,18 @@ mod tests {
     }
 
     #[test]
+    fn test_connected_components_isolated_nodes() {
+        let graph = Graph::<u8>::from_edges(Vec::<Edge<u8>>::new().into_iter(), 4);
+        assert_eq!(graph.connected_components(), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
     fn test_connected_components_simple() {
         // Graph: 0-1  2-3  4 (isolated)
         let edges = edges_from_tuples(vec![(0, 1), (2, 3)]);
         let graph = Graph::<u8>::from_edges(edges.into_iter(), 5);
 
-        let mut components: Vec<HashSet<NodeIdx>> = graph.connected_components().collect();
-        components.sort_by_key(|c| c.iter().min().cloned().unwrap());
-
-        assert_eq!(components.len(), 3);
-        assert_eq!(components[0], [0, 1].into_iter().collect());
-        assert_eq!(components[1], [2, 3].into_iter().collect());
-        assert_eq!(components[2], [4].into_iter().collect());
+        assert_eq!(graph.connected_components(), vec![0, 0, 1, 1, 2]);
     }
 
     #[test]
@@ -638,12 +573,15 @@ mod tests {
         let edges = edges_from_tuples(vec![(0, 1), (1, 2), (2, 3), (0, 4), (2, 5)]);
         let graph = Graph::<u8>::from_edges(edges.into_iter(), 7);
 
-        let mut components: Vec<HashSet<NodeIdx>> = graph.connected_components().collect();
-        components.sort_by_key(|c| c.iter().min().cloned().unwrap());
+        assert_eq!(graph.connected_components(), vec![0, 0, 0, 0, 0, 0, 1]);
+    }
 
-        assert_eq!(components.len(), 2);
-        assert_eq!(components[0], [0, 1, 2, 3, 4, 5].into_iter().collect());
-        assert_eq!(components[1], [6].into_iter().collect());
+    #[test]
+    fn test_connected_components_self_loop() {
+        let edges = vec![Edge::new(0, 0, Some(1_u8)), Edge::new(1, 2, Some(1_u8))];
+        let graph = Graph::<u8>::from_edges(edges.into_iter(), 4);
+
+        assert_eq!(graph.connected_components(), vec![0, 1, 1, 2]);
     }
 
     #[test]
@@ -654,94 +592,60 @@ mod tests {
         //
         // Only consider components where all node indices have the same parity
 
-        let edges = edges_from_tuples(vec![(0, 1), (0, 2), (1, 3), (2, 3)]);
-        let graph = Graph::<u8>::from_edges(edges.into_iter(), 4);
+        let parity = |src_node: NodeIdx, node: NodeIdx| src_node % 2 == node % 2;
+        let tuples = vec![(0, 1), (0, 2), (1, 3), (2, 3)];
 
-        let mut components: Vec<HashSet<NodeIdx>> = graph
-            .connected_components_by(|src_node, node| src_node % 2 == node % 2)
-            .collect();
+        let graph_u8 = Graph::<u8>::from_edges(edges_from_tuples(tuples.clone()), 4);
+        let graph_usize = Graph::<usize>::from_edges(edges_from_tuples(tuples), 4);
 
-        components.sort_by_key(|c| c.iter().min().cloned().unwrap());
-
-        assert_eq!(components.len(), 2);
-        assert_eq!(components[0], [0, 2].into_iter().collect());
-        assert_eq!(components[1], [1, 3].into_iter().collect());
+        assert_eq!(graph_u8.connected_components_by(parity), vec![0, 1, 0, 1]);
+        assert_eq!(
+            graph_usize.connected_components_by(parity),
+            vec![0, 1, 0, 1]
+        );
     }
 
-    fn labels_from_sets<T, F>(graph: &Graph<T>, filter: F) -> Vec<usize>
+    /// Independent reference: union-find over the edges accepted by `filter`,
+    /// with ids assigned in order of the lowest node index of each component.
+    fn union_find_labels<T, F>(graph: &Graph<T>, filter: F) -> Vec<usize>
     where
         T: EdgeWeight,
         F: Fn(NodeIdx, NodeIdx) -> bool,
     {
-        let mut labels = vec![0; graph.get_num_nodes()];
-        for (id, component) in graph.connected_components_by(filter).enumerate() {
-            for node in component {
-                labels[node] = id;
+        fn find(parents: &mut [usize], node: usize) -> usize {
+            let mut root = node;
+            while parents[root] != root {
+                root = parents[root];
+            }
+            parents[node] = root;
+            root
+        }
+
+        let n = graph.get_num_nodes();
+        let mut parents: Vec<usize> = (0..n).collect();
+        for edge in graph.get_edges_iter() {
+            if filter(edge.src, edge.dest) {
+                let (a, b) = (find(&mut parents, edge.src), find(&mut parents, edge.dest));
+                parents[a.max(b)] = a.min(b);
             }
         }
-        labels
-    }
 
-    fn assert_labels_match<T, F>(graph: &Graph<T>, filter: F)
-    where
-        T: EdgeWeight,
-        F: Fn(NodeIdx, NodeIdx) -> bool + Copy,
-    {
-        assert_eq!(
-            graph.component_labels_by(filter),
-            labels_from_sets(graph, filter)
-        );
-    }
-
-    #[test]
-    fn test_component_labels_match_isolated_nodes() {
-        let graph = Graph::<u8>::from_edges(Vec::<Edge<u8>>::new().into_iter(), 4);
-        assert_eq!(graph.component_labels(), vec![0, 1, 2, 3]);
-        assert_labels_match(&graph, |_, _| true);
+        let mut ids = vec![usize::MAX; n];
+        let mut next_id = 0;
+        (0..n)
+            .map(|node| {
+                let root = find(&mut parents, node);
+                if ids[root] == usize::MAX {
+                    ids[root] = next_id;
+                    next_id += 1;
+                }
+                ids[root]
+            })
+            .collect()
     }
 
     #[test]
-    fn test_component_labels_match_simple_and_complex() {
-        let simple = Graph::<u8>::from_edges(edges_from_tuples(vec![(0, 1), (2, 3)]), 5);
-        assert_eq!(
-            simple.component_labels(),
-            labels_from_sets(&simple, |_, _| true)
-        );
-        assert_eq!(simple.component_labels(), vec![0, 0, 1, 1, 2]);
-
-        let complex = Graph::<u8>::from_edges(
-            edges_from_tuples(vec![(0, 1), (1, 2), (2, 3), (0, 4), (2, 5)]),
-            7,
-        );
-        assert_eq!(
-            complex.component_labels(),
-            labels_from_sets(&complex, |_, _| true)
-        );
-        assert_eq!(complex.component_labels(), vec![0, 0, 0, 0, 0, 0, 1]);
-    }
-
-    #[test]
-    fn test_component_labels_match_self_loop() {
-        let edges = vec![Edge::new(0, 0, Some(1_u8)), Edge::new(1, 2, Some(1_u8))];
-        let graph = Graph::<u8>::from_edges(edges.into_iter(), 4);
-        assert_eq!(graph.component_labels(), vec![0, 1, 1, 2]);
-        assert_labels_match(&graph, |_, _| true);
-    }
-
-    #[test]
-    fn test_component_labels_match_parity_filter_both_weight_types() {
-        let edges = edges_from_tuples(vec![(0, 1), (0, 2), (1, 3), (2, 3)]);
-        let graph_u8 = Graph::<u8>::from_edges(edges.into_iter(), 4);
-        let graph_usize =
-            Graph::<usize>::from_edges(edges_from_tuples(vec![(0, 1), (0, 2), (1, 3), (2, 3)]), 4);
-        let parity = |src: NodeIdx, node: NodeIdx| src % 2 == node % 2;
-        assert_labels_match(&graph_u8, parity);
-        assert_labels_match(&graph_usize, parity);
-        assert_eq!(graph_u8.component_labels_by(parity), vec![0, 1, 0, 1]);
-    }
-
-    #[test]
-    fn test_component_labels_match_random_graph_both_weight_types() {
+    fn test_connected_components_match_union_find_on_random_graph() {
         use crate::common::test_utils::get_random_graph;
         use rand::Rng;
         use rand::SeedableRng;
@@ -749,11 +653,13 @@ mod tests {
 
         let graph_u8 = get_random_graph::<u8>(200, 400, 0);
         let graph_usize = get_random_graph::<usize>(200, 400, 0);
-        assert_labels_match(&graph_u8, |_, _| true);
-        assert_labels_match(&graph_usize, |_, _| true);
         assert_eq!(
-            graph_u8.component_labels(),
-            labels_from_sets(&graph_u8, |_, _| true)
+            graph_u8.connected_components(),
+            union_find_labels(&graph_u8, |_, _| true)
+        );
+        assert_eq!(
+            graph_usize.connected_components(),
+            union_find_labels(&graph_usize, |_, _| true)
         );
 
         let mut rng = StdRng::seed_from_u64(0);
@@ -761,7 +667,13 @@ mod tests {
             .map(|_| rng.random_range(0..5))
             .collect();
         let same_partition = |src: NodeIdx, node: NodeIdx| partition[src] == partition[node];
-        assert_labels_match(&graph_u8, same_partition);
-        assert_labels_match(&graph_usize, same_partition);
+        assert_eq!(
+            graph_u8.connected_components_by(same_partition),
+            union_find_labels(&graph_u8, same_partition)
+        );
+        assert_eq!(
+            graph_usize.connected_components_by(same_partition),
+            union_find_labels(&graph_usize, same_partition)
+        );
     }
 }

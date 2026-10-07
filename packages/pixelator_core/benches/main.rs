@@ -230,22 +230,7 @@ mod bench_connected_components {
     #[divan::bench(sample_count = 10)]
     fn bench_connected_components(bencher: Bencher) {
         let graph = load_graph();
-        bencher.bench_local(|| black_box(graph.component_labels()));
-    }
-
-    /// Component id of every node, collected from each component set.
-    #[divan::bench(sample_count = 10)]
-    fn bench_connected_components_hashset(bencher: Bencher) {
-        let graph = load_graph();
-        bencher.bench_local(|| {
-            let mut labels = vec![0usize; graph.get_num_nodes()];
-            for (id, component) in graph.connected_components().enumerate() {
-                for node in component {
-                    labels[node] = id;
-                }
-            }
-            black_box(labels)
-        });
+        bencher.bench_local(|| black_box(graph.connected_components()));
     }
 }
 
