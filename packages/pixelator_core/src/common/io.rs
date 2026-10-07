@@ -265,18 +265,14 @@ pub fn create_graph_and_umi_mapping_from_parquet_file<T>(
 where
     T: EdgeWeight,
 {
-    info!("Creating UMI mapping...");
-    let umi_mapping = UmiToNodeIndexMapping::from_umi_pairs(
+    info!("Creating UMI mapping and graph edges in one pass...");
+    let (umi_mapping, triplets) = UmiToNodeIndexMapping::from_umi_pairs_with_edges(
         ParquetUMIPairIter::new(parquet_file).expect("Failed to create ParquetUMIPairIter"),
     );
 
     let num_nodes = umi_mapping.get_num_of_nodes();
-    let edges = umi_mapping.map_umi_pair_iterator_to_edge(
-        ParquetUMIPairIter::new(parquet_file).expect("Failed to create ParquetUMIPairIter"),
-    );
-
     info!("Creating graph...");
-    let graph = Graph::<T>::from_edges(edges, num_nodes);
+    let graph = Graph::<T>::from_undirected_triplets(triplets, num_nodes);
     info!(
         "Graph created with {} nodes, {} edge entries, total edge weight {}",
         graph.get_num_nodes(),

@@ -40,6 +40,64 @@ impl UmiToNodeIndexMapping {
         }
     }
 
+    /// Assign dense node ids and collect undirected `(min, max, weight)` triplets
+    /// in a single pass over UMI pairs.
+    ///
+    /// The triplet buffer is sized to the file row count. The map and reverse vec
+    /// reserve `2 * num_pairs / 3` (mean-degree-3 estimate) so the map does not
+    /// rehash while that edge buffer is already allocated on typical UMI graphs.
+    pub fn from_umi_pairs_with_edges<I, T>(
+        umi_pairs: I,
+    ) -> (Self, Vec<(NodeIdx, NodeIdx, T)>)
+    where
+        I: IntoIterator<Item = UMIPair>,
+        T: EdgeWeight,
+    {
+        let umi_pairs = umi_pairs.into_iter();
+        let num_pairs = umi_pairs.size_hint().0;
+        // Mean degree ~3 ⇒ N ≈ 2E/3. Reserve that so the map does not rehash
+        // while the triplet buffer below is live.
+        let node_capacity = num_pairs.saturating_mul(2) / 3;
+        let mut node_idx_to_umi: Vec<NodeIdx> = Vec::with_capacity(node_capacity);
+        let mut umi_to_node_idx: HashMap<UMI, NodeIdx> =
+            HashMap::with_capacity_and_hasher(node_capacity, Default::default());
+        let mut triplets: Vec<(NodeIdx, NodeIdx, T)> = Vec::with_capacity(num_pairs);
+
+        for (src_umi, dest_umi) in umi_pairs {
+            let src = match umi_to_node_idx.entry(src_umi) {
+                Entry::Occupied(e) => *e.get(),
+                Entry::Vacant(e) => {
+                    let idx = node_idx_to_umi.len();
+                    e.insert(idx);
+                    node_idx_to_umi.push(src_umi);
+                    idx
+                }
+            };
+            let dest = match umi_to_node_idx.entry(dest_umi) {
+                Entry::Occupied(e) => *e.get(),
+                Entry::Vacant(e) => {
+                    let idx = node_idx_to_umi.len();
+                    e.insert(idx);
+                    node_idx_to_umi.push(dest_umi);
+                    idx
+                }
+            };
+            if src <= dest {
+                triplets.push((src, dest, T::one()));
+            } else {
+                triplets.push((dest, src, T::one()));
+            }
+        }
+
+        (
+            Self {
+                node_idx_to_umi,
+                umi_to_node_idx,
+            },
+            triplets,
+        )
+    }
+
     pub fn map_node_index_to_umi(&self, node_index: NodeIdx) -> UMI {
         self.node_idx_to_umi[node_index]
     }
