@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789391765583,
+  "lastUpdate": 1791460268790,
   "repoUrl": "https://github.com/PixelgenTechnologies/pixelator-core",
   "entries": {
     "Native Community Detection Benchmark": [
@@ -3634,6 +3634,80 @@ window.BENCHMARK_DATA = {
           {
             "name": "bench_parquet_writing",
             "value": 0.5045000000000001,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "johan.dahlberg@pixelgen.com",
+            "name": "Johan Dahlberg",
+            "username": "johandahlberg"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "65d237b391e20eca724e20a76f5d5b33860e0869",
+          "message": "Merge pull request #25 from PixelgenTechnologies/cursor/component-labels-1f29\n\nUse a label buffer for component id scans",
+          "timestamp": "2026-10-08T13:45:17+02:00",
+          "tree_id": "b8eb62a21098d7c2db9546d6cebf7339c269dea3",
+          "url": "https://github.com/PixelgenTechnologies/pixelator-core/commit/65d237b391e20eca724e20a76f5d5b33860e0869"
+        },
+        "date": 1791460268253,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "bench_fast_label_propagation",
+            "value": 0.005435,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity",
+            "value": 0.033299999999999996,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity_medium",
+            "value": 16.45,
+            "unit": "s"
+          },
+          {
+            "name": "bench_connected_components",
+            "value": 0.1879,
+            "unit": "s"
+          },
+          {
+            "name": "mem_fast_label_propagation",
+            "value": 53.2532,
+            "unit": "MiB"
+          },
+          {
+            "name": "mem_graph_construction",
+            "value": 348.0911,
+            "unit": "MiB"
+          },
+          {
+            "name": "mem_leiden_modularity",
+            "value": 608.9211,
+            "unit": "MiB"
+          },
+          {
+            "name": "bench_create_graph_from_parquet",
+            "value": 1.976,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_reading",
+            "value": 0.4193,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_writing",
+            "value": 0.5102,
             "unit": "s"
           }
         ]
