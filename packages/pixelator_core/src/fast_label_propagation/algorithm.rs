@@ -95,21 +95,11 @@ where
     P: NodePartitioning,
 {
     info!("Cleaning partitions by splitting disconnected components...");
-    let mut new_partitioning = vec![0; graph.get_num_nodes()];
-
-    for (i, component) in graph
-        .connected_components_by(|src_node, node| {
-            node_partition.get_partition_for_node(&src_node)
-                == node_partition.get_partition_for_node(&node)
-        })
-        .enumerate()
-    {
-        for node in component {
-            new_partitioning[node] = i;
-        }
-    }
-
-    P::initialize_from_partitions(new_partitioning)
+    let labels = graph.connected_components_by(|src_node, node| {
+        node_partition.get_partition_for_node(&src_node)
+            == node_partition.get_partition_for_node(&node)
+    });
+    P::initialize_from_partitions(labels)
 }
 
 #[cfg(test)]
@@ -263,8 +253,22 @@ mod tests {
                 .connected_components_by(|node_1, node_2| result_partition
                     .get_node_to_partition_map()[node_1]
                     == result_partition.get_node_to_partition_map()[node_2])
-                .count(),
+                .into_iter()
+                .max()
+                .unwrap()
+                + 1,
             result_partition.num_partitions()
         );
+    }
+
+    #[test]
+    fn test_clean_partitions_splits_disconnected_partitions() {
+        // Path 0-1-2-3. Nodes 0, 1 and 3 share partition 5, but 3 is not connected to 0-1.
+        let graph = Graph::<u8>::from_edges(edges_from_tuples(vec![(0, 1), (1, 2), (2, 3)]), 4);
+        let partitioning = FastNodePartitioning::initialize_from_partitions(vec![5, 5, 6, 5]);
+
+        let cleaned = clean_partitions(&graph, partitioning);
+
+        assert_eq!(cleaned.get_node_to_partition_map(), [0, 0, 1, 2].as_slice());
     }
 }

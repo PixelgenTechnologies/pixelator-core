@@ -33,10 +33,12 @@ impl GraphProperties {
         let node_count = graph.get_num_nodes();
         let edge_weight_sum = graph.get_total_edge_weight();
 
-        let component_sizes = graph
-            .connected_components()
-            .map(|nodes| nodes.len())
-            .collect::<Vec<_>>();
+        let labels = graph.connected_components();
+        let mut component_sizes =
+            vec![0usize; labels.iter().copied().max().map(|max| max + 1).unwrap_or(0)];
+        for label in labels {
+            component_sizes[label] += 1;
+        }
         let component_count = component_sizes.len();
 
         let fraction_in_largest_component =
@@ -66,7 +68,7 @@ impl GraphProperties {
 #[cfg(test)]
 mod tests {
 
-    use super::*;
+    use super::{GraphProperties, HashMap};
     use crate::common::graph::Graph;
     use crate::common::types::Edge;
     use crate::common::types::edges_from_tuples;
@@ -106,5 +108,18 @@ mod tests {
         assert_eq!(props.edge_weight_sum, 0);
         assert_eq!(props.n_connected_components, 3);
         assert!((props.fraction_in_largest_component - (1.0 / 3.0)).abs() < 1e-8);
+    }
+
+    #[test]
+    fn test_graph_properties_component_size_distribution() {
+        // Graph: 0-1-2  3 (isolated)  4-5
+        let edges = edges_from_tuples(vec![(0, 1), (1, 2), (4, 5)]);
+        let graph = Graph::<u8>::from_edges(edges.into_iter(), 6);
+        let props = GraphProperties::new(&graph);
+
+        let expected: HashMap<usize, usize> = [(3, 1), (1, 1), (2, 1)].into_iter().collect();
+        assert_eq!(props.component_size_distribution, expected);
+        // Every component is below MIN_PNA_COMPONENT_SIZE
+        assert_eq!(props.stranded_nodes, 6);
     }
 }

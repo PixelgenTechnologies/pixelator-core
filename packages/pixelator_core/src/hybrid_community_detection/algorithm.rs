@@ -210,7 +210,10 @@ mod tests {
                 .connected_components_by(|node_1, node_2| result_partition
                     .get_node_to_partition_map()[node_1]
                     == result_partition.get_node_to_partition_map()[node_2])
-                .count(),
+                .into_iter()
+                .max()
+                .unwrap()
+                + 1,
             result_partition.num_partitions()
         );
 
