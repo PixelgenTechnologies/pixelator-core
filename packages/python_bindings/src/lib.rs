@@ -288,6 +288,8 @@ pub fn run_label_propagation(parquet_file: &str, epochs: u64, output: &str) -> P
 /// number of nodes in the smallest community exceeds this threshold. Cannot be used together with
 /// `merge_edge_threshold`.
 ///
+/// Merging is only applied when the algorithm converges, not when it is stopped by `max_iteration`.
+///
 /// # Returns
 /// A tuple containing:
 /// * The number of partitions

@@ -16,13 +16,13 @@ pub fn leiden<Q: QualityMetrics>(
 ) -> PartitionedGraphStatistics {
     let mut it = 0;
     debug!("Starting Leiden algorithm");
-    loop {
+    let converged = loop {
         if let Some(max_iteration) = max_iteration
             && it >= max_iteration
         {
             wp_graph.aggregate(AggregateOptions::All);
             wp_graph.normalize_partition();
-            break;
+            break false;
         }
 
         debug!("Moving nodes fast (iteration {})", it);
@@ -36,7 +36,7 @@ pub fn leiden<Q: QualityMetrics>(
         );
 
         if wp_graph.get_partitioning().num_partitions() == wp_graph.get_graph().get_num_nodes() {
-            break;
+            break true;
         }
 
         debug!("Aggregating graph (iteration {})", it);
@@ -45,9 +45,10 @@ pub fn leiden<Q: QualityMetrics>(
         wp_graph.normalize_partition();
 
         it += 1;
-    }
+    };
 
-    if let Some(threshold_options) = threshold_options {
+    // Merging is skipped when the algorithm was stopped by `max_iteration`.
+    if converged && let Some(threshold_options) = threshold_options {
         debug!("Merging highly connected nodes");
         merge_highly_connected_nodes(wp_graph, threshold_options);
     }
@@ -115,12 +116,21 @@ pub enum ThresholdOptions {
 /// - in terms of number of edges relative to the size of the smallest of the two partitions, e.g.
 ///   if any two partitions will be merged if there are connected by more than more than X edges per
 ///   umis in the smallest partition
+///
+/// Every node must be in its own partition when this is called, so that merging strongly
+/// connected nodes is the same as merging partitions.
 fn merge_highly_connected_nodes<Q: QualityMetrics>(
     wp_graph: &mut WeightedPartitionedGraph<Q>,
     merge_threshold: ThresholdOptions,
 ) {
+    debug_assert_eq!(
+        wp_graph.get_partitioning().num_partitions(),
+        wp_graph.get_graph().get_num_nodes(),
+        "merge_highly_connected_nodes expects one partition per node"
+    );
+
     let graph = wp_graph.get_graph();
-    let labels = graph.connected_components_by(|node_1, node_2| match merge_threshold {
+    let component_of = graph.connected_components_by(|node_1, node_2| match merge_threshold {
         ThresholdOptions::Absolute(t) => graph.get_edge_weight(node_1, node_2).unwrap() > t,
         ThresholdOptions::Relative(rt) => {
             let node_weights = wp_graph.get_node_weights();
@@ -129,26 +139,16 @@ fn merge_highly_connected_nodes<Q: QualityMetrics>(
         }
     });
 
-    // Every node in a component takes the partition of that component's lowest node index.
-    let n_labels = labels.iter().copied().max().map(|max| max + 1).unwrap_or(0);
-    let mut representative = vec![usize::MAX; n_labels];
-    for (node, &label) in labels.iter().enumerate() {
-        if node < representative[label] {
-            representative[label] = node;
-        }
+    // As many components as nodes means no strong edges: nothing to merge.
+    let n_components = component_of.iter().max().map_or(0, |max| max + 1);
+    if n_components == component_of.len() {
+        return;
     }
-    let targets: Vec<usize> = {
-        let partition_of = wp_graph.get_partitioning().get_node_to_partition_map();
-        labels
-            .iter()
-            .map(|&label| partition_of[representative[label]])
-            .collect()
-    };
-    for (node, &pid) in targets.iter().enumerate() {
-        if wp_graph.get_partitioning().get_node_to_partition_map()[node] != pid {
-            // Does not refresh partition_to_node_map. Rebuild once below.
-            wp_graph.update_partition_fast(node, pid);
-        }
+
+    // Each strongly connected component becomes a partition, identified by its component id.
+    for (node, component) in component_of.into_iter().enumerate() {
+        // Does not refresh partition_to_node_map. Rebuild once below.
+        wp_graph.update_partition_fast(node, component);
     }
     // Make sure we rebuild the partition_to_node_map after the merge phase.
     // To ensure that the partition_to_node_map is up to date, for later callers.
@@ -320,32 +320,9 @@ mod tests {
         assert_ne!(result_partition_map[0], result_partition_map[2]);
     }
 
-    #[test]
-    fn test_leiden_uses_absolute_merge_threshold() {
-        let edges = vec![
-            Edge::new(0, 1, Some(6)),
-            Edge::new(1, 2, Some(6)),
-            Edge::new(2, 0, Some(15)),
-        ];
-        let num_nodes = 3;
-        let graph = Graph::<usize>::from_edges(edges.into_iter(), num_nodes);
-        let partitioning = LeidenNodePartitioning::initialize_with_singlet_partitions(num_nodes);
-        let quality = Modularity::new(0.5, graph.get_total_edge_weight());
-        let mut wp_graph = WeightedPartitionedGraph::new(graph, partitioning, quality, None, None);
-
-        leiden(
-            &mut wp_graph,
-            1.0,
-            Some(0),
-            Some(ThresholdOptions::Absolute(10)),
-        );
-
-        assert_eq!(wp_graph.get_graph().get_num_nodes(), 2);
-        assert_eq!(wp_graph.get_graph().get_edge_weight(0, 1), Some(12));
-    }
-
-    #[test]
-    fn test_leiden_uses_relative_merge_threshold() {
+    /// Triangle where the resolution is high enough for Leiden to keep all nodes separate,
+    /// so only the merge threshold can merge them.
+    fn get_triangle_wp_graph() -> WeightedPartitionedGraph<Modularity> {
         let edges = vec![
             Edge::new(0, 1, Some(4)),
             Edge::new(1, 2, Some(6)),
@@ -354,18 +331,69 @@ mod tests {
         let num_nodes = 3;
         let graph = Graph::<usize>::from_edges(edges.into_iter(), num_nodes);
         let partitioning = LeidenNodePartitioning::initialize_with_singlet_partitions(num_nodes);
-        let quality = Modularity::new(0.5, graph.get_total_edge_weight());
-        let mut wp_graph = WeightedPartitionedGraph::new(graph, partitioning, quality, None, None);
+        let quality = Modularity::new(1000., graph.get_total_edge_weight());
+        WeightedPartitionedGraph::new(graph, partitioning, quality, None, None)
+    }
+
+    #[test]
+    fn test_leiden_uses_absolute_merge_threshold() {
+        let mut wp_graph = get_triangle_wp_graph();
 
         leiden(
             &mut wp_graph,
             1.0,
-            Some(0),
+            None,
+            Some(ThresholdOptions::Absolute(10)),
+        );
+
+        assert_eq!(wp_graph.get_graph().get_num_nodes(), 2);
+        assert_eq!(wp_graph.get_graph().get_edge_weight(0, 1), Some(10));
+    }
+
+    #[test]
+    fn test_leiden_uses_relative_merge_threshold() {
+        let mut wp_graph = get_triangle_wp_graph();
+
+        leiden(
+            &mut wp_graph,
+            1.0,
+            None,
             Some(ThresholdOptions::Relative(5.0)),
         );
 
         assert_eq!(wp_graph.get_graph().get_num_nodes(), 2);
         assert_eq!(wp_graph.get_graph().get_edge_weight(0, 1), Some(10));
+    }
+
+    #[test]
+    fn test_merge_highly_connected_nodes_without_strong_edges_changes_nothing() {
+        let mut wp_graph = get_triangle_wp_graph();
+        let partitions_before = wp_graph
+            .get_partitioning()
+            .get_node_to_partition_map()
+            .to_vec();
+
+        merge_highly_connected_nodes(&mut wp_graph, ThresholdOptions::Absolute(100));
+
+        assert_eq!(wp_graph.get_graph().get_num_nodes(), 3);
+        assert_eq!(
+            wp_graph.get_partitioning().get_node_to_partition_map(),
+            partitions_before.as_slice()
+        );
+    }
+
+    #[test]
+    fn test_leiden_skips_merge_threshold_when_stopped_by_max_iteration() {
+        let mut wp_graph = get_triangle_wp_graph();
+
+        leiden(
+            &mut wp_graph,
+            1.0,
+            Some(0),
+            Some(ThresholdOptions::Absolute(10)),
+        );
+
+        assert_eq!(wp_graph.get_graph().get_num_nodes(), 3);
     }
 
     #[test]
@@ -412,25 +440,25 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_keeps_lowest_node_index_partition() {
-        // Edge 0-2 is above the absolute threshold. Nodes start in different partitions.
-        // The surviving partition is the one owned by the lower node index.
+    fn test_merge_highly_connected_nodes_with_arbitrary_partition_ids() {
+        // Edge 0-2 is above the absolute threshold. The initial partition ids overlap with
+        // the component ids the merge assigns (0 for nodes 0 and 2, 1 for node 1).
         let edges = vec![
             Edge::new(0, 1, Some(1)),
             Edge::new(1, 2, Some(1)),
             Edge::new(2, 0, Some(15)),
         ];
         let graph = Graph::<usize>::from_edges(edges.into_iter(), 3);
-        let partitioning = LeidenNodePartitioning::initialize_from_partitions(vec![5, 1, 9]);
+        let partitioning = LeidenNodePartitioning::initialize_from_partitions(vec![1, 0, 9]);
         let quality = Modularity::new(0.5, graph.get_total_edge_weight());
         let mut wp_graph = WeightedPartitionedGraph::new(graph, partitioning, quality, None, None);
 
         merge_highly_connected_nodes(&mut wp_graph, ThresholdOptions::Absolute(10));
 
         let ancestors = wp_graph.get_ancestor_to_partition_map();
-        assert_eq!(ancestors[0], 5);
-        assert_eq!(ancestors[2], 5);
-        assert_eq!(ancestors[1], 1);
+        assert_eq!(ancestors[0], ancestors[2]);
+        assert_ne!(ancestors[0], ancestors[1]);
+        assert_eq!(wp_graph.get_graph().get_num_nodes(), 2);
     }
 
     #[test]
