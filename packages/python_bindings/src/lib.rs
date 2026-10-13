@@ -23,10 +23,20 @@ use rustc_hash::FxHashMap as HashMap;
 
 use paste::paste;
 
-use mimalloc::MiMalloc;
+mod convert;
+mod edgelist;
 
+// MiMalloc backs every Rust allocation in this extension, including the
+// statically linked `pixelator-core` code, so the hot edgelist path keeps its
+// allocator performance even when driven from Python -- except on macOS, where
+// mimalloc reserves a fixed pthread thread-local-storage slot for the per-thread
+// heap pointer. PyArrow bundles its own, independently-built mimalloc that
+// reserves the same kind of slot, and when both are loaded into the same process
+// they clobber each other's per-thread heap pointer. Falling back to the system
+// allocator on macOS avoids that.
+#[cfg(not(target_os = "macos"))]
 #[global_allocator]
-static GLOBAL: MiMalloc = MiMalloc;
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[pymodule(name = "pixelator_core")]
 mod pixelator_core_py {
@@ -46,6 +56,15 @@ mod pixelator_core_py {
 
     #[pymodule_export]
     use super::run_hybrid_community_detection;
+
+    #[pymodule_export]
+    use super::edgelist::run_edgelist;
+
+    #[pymodule_export]
+    use super::edgelist::encode_dna_2bit;
+
+    #[pymodule_export]
+    use super::edgelist::decode_dna_2bit;
 
     #[pymodule_export]
     use super::PyGraphProperties;
