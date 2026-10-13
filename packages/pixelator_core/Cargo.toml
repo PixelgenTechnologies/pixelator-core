@@ -21,14 +21,22 @@ itertools = "0.14.0"
 parquet = "58.1.0"
 arrow = "58.1.0"
 mimalloc = "0.1.48"
+paraseq = "0.4.13"
+serde = { version = "1.0.228", features = ["derive"] }
+serde-saphyr = { version = "0.0.27", default-features = false, features = ["deserialize"] }
 
 [features]
 default = []
 experimental = []
+# Compiles `test_fixtures` outside `cfg(test)`, so benches can load the bundled
+# assay and panel. Unit tests see the module without this feature.
+test-fixtures = []
 
 [dev-dependencies]
 divan = "0.1.21"
 tempfile = "3.24.0"
+# Benches are not `cfg(test)`, so they reach `test_fixtures` through this feature.
+pixelator-core = { path = ".", features = ["test-fixtures"] }
 
 [[bench]]
 name = "pixelator-core-benchmarks"
