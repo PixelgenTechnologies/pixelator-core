@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792154877272,
+  "lastUpdate": 1792155324003,
   "repoUrl": "https://github.com/PixelgenTechnologies/pixelator-core",
   "entries": {
     "Native Community Detection Benchmark": [
@@ -3782,6 +3782,80 @@ window.BENCHMARK_DATA = {
           {
             "name": "bench_parquet_writing",
             "value": 0.5149,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "adrien.coulier@pixelgen.com",
+            "name": "Adrien Coulier",
+            "username": "Aratz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3687e80186d9dc5a7a85ae7757176ba84c783733",
+          "message": "Merge pull request #27 from PixelgenTechnologies/cursor/one-pass-graph-build-1f29\n\nRead the parquet edge list once when building a graph",
+          "timestamp": "2026-10-16T14:49:39+02:00",
+          "tree_id": "dcd2be9a1930f1fc51c8990f14ce0464b9adf5b0",
+          "url": "https://github.com/PixelgenTechnologies/pixelator-core/commit/3687e80186d9dc5a7a85ae7757176ba84c783733"
+        },
+        "date": 1792155321704,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "bench_fast_label_propagation",
+            "value": 0.0062900000000000005,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity",
+            "value": 0.02586,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity_medium",
+            "value": 15.36,
+            "unit": "s"
+          },
+          {
+            "name": "bench_connected_components",
+            "value": 0.2195,
+            "unit": "s"
+          },
+          {
+            "name": "mem_fast_label_propagation",
+            "value": 53.2532,
+            "unit": "MiB"
+          },
+          {
+            "name": "mem_graph_construction",
+            "value": 342.9413,
+            "unit": "MiB"
+          },
+          {
+            "name": "mem_leiden_modularity",
+            "value": 564.6706,
+            "unit": "MiB"
+          },
+          {
+            "name": "bench_create_graph_from_parquet",
+            "value": 1.586,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_reading",
+            "value": 0.4338,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_writing",
+            "value": 1.23,
             "unit": "s"
           }
         ]
