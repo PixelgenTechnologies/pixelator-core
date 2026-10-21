@@ -1,3 +1,4 @@
+mod dropped_read_buffer;
 mod extract;
 mod processor;
 mod qc;
@@ -6,18 +7,23 @@ mod row_buffer;
 mod stats;
 
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
-use std::sync::mpsc::sync_channel;
-use std::thread;
+use std::sync::mpsc::{Receiver, sync_channel};
+use std::thread::{self, JoinHandle};
 
 use crate::common::io::write_record_batches_to_path;
+use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
 use paraseq::fastq;
 use paraseq::prelude::*;
+use parquet::basic::{Compression, ZstdLevel};
+use parquet::file::properties::WriterProperties;
 
 use crate::common::{Assay, Panel};
 
+use dropped_read_buffer::DroppedReadBuffer;
 pub use extract::{DEFAULT_LBS_OVERLAP_MAX_EDITS, FilterConfig, LbsSearcher};
 pub use processor::{PairedProcessor, SingleProcessor};
 pub use read_layout::Strand;
@@ -40,6 +46,18 @@ const BATCH_THRESHOLD: usize = 1_000_000;
 ///   caps the queue's memory footprint around ~1.8GB, preventing OOM crashes on a 64GB system.
 const CHANNEL_SIZE_FACTOR: usize = 4;
 
+/// Rows per dropped-reads batch, far fewer than [`BATCH_THRESHOLD`] because each
+/// row carries whole reads: a 2x150 bp pair with qualities is ~600 bytes against
+/// the edgelist's 24. At this size a batch is ~30MB.
+const DROPPED_BATCH_THRESHOLD: usize = 50_000;
+
+/// Bounded channel capacity for dropped-read batches, per worker thread.
+///
+/// Smaller than [`CHANNEL_SIZE_FACTOR`] for the same reason the batches are: with
+/// 16 threads, 16 queued batches plus one filling per worker caps the feature's
+/// memory around ~1GB. A writer that falls behind applies backpressure instead.
+const DROPPED_CHANNEL_SIZE_FACTOR: usize = 1;
+
 type BoxedReader = Box<dyn Read + Send>;
 
 /// FASTQ source for [`edgelist`]: single-end (forward or reverse) or paired-end.
@@ -51,7 +69,9 @@ pub enum FastqInput {
 
 /// Builds the edgelist Parquet from `input`.
 ///
-/// Output is written to `{output_dir}/{sample_name}.parquet`.
+/// Output is written to `{output_dir}/{sample_name}.parquet`. When
+/// `save_dropped_reads` is set, every read the extractor discards is also written,
+/// with the reason it was dropped, to `{output_dir}/{sample_name}.dropped_reads.parquet`.
 ///
 /// `reads_processed` is incremented (off the per-read hot path) as reads are
 /// consumed; callers can observe it from another thread to report progress.
@@ -66,22 +86,42 @@ pub fn edgelist<P: AsRef<Path>>(
     output_dir: P,
     n_threads: usize,
     filters: FilterConfig,
+    save_dropped_reads: bool,
     reads_processed: Arc<AtomicU64>,
 ) -> Result<EdgelistStats, Box<dyn std::error::Error>> {
+    let output_dir = output_dir.as_ref();
+
     let (tx, rx) = sync_channel(CHANNEL_SIZE_FACTOR * n_threads);
+    let handle = spawn_parquet_writer(
+        output_dir.join(format!("{sample_name}.parquet")),
+        RowBuffer::schema(),
+        rx,
+        None,
+    );
 
-    let parquet_output = output_dir.as_ref().join(format!("{}.parquet", sample_name));
-    let schema = RowBuffer::schema();
-    let handle = thread::spawn(move || {
-        write_record_batches_to_path(parquet_output, schema, rx.into_iter(), None)
-            .map_err(|e| e.to_string())
-    });
-
+    let (dropped_tx, dropped_handle) = if save_dropped_reads {
+        let (tx, rx) = sync_channel(DROPPED_CHANNEL_SIZE_FACTOR * n_threads);
+        // Unlike the edgelist's packed integers, raw sequence and quality text
+        // compresses several-fold, which is worth the writer thread's time.
+        let properties = WriterProperties::builder()
+            .set_compression(Compression::ZSTD(ZstdLevel::default()))
+            .build();
+        let handle = spawn_parquet_writer(
+            output_dir.join(format!("{sample_name}.dropped_reads.parquet")),
+            DroppedReadBuffer::schema(),
+            rx,
+            Some(properties),
+        );
+        (Some(tx), Some(handle))
+    } else {
+        (None, None)
+    };
     let (pipeline, stats) = match input {
         FastqInput::SingleForward(r) => {
             let mut proc =
                 SingleProcessor::new(tx, BATCH_THRESHOLD, assay, panel, Strand::Forward, filters)
-                    .with_progress_counter(reads_processed);
+                    .with_progress_counter(reads_processed)
+                    .with_dropped_reads(dropped_tx, DROPPED_BATCH_THRESHOLD);
             (
                 fastq::Reader::new(r).process_parallel(&mut proc, n_threads),
                 proc.into_stats(),
@@ -90,7 +130,8 @@ pub fn edgelist<P: AsRef<Path>>(
         FastqInput::SingleReverse(r) => {
             let mut proc =
                 SingleProcessor::new(tx, BATCH_THRESHOLD, assay, panel, Strand::Reverse, filters)
-                    .with_progress_counter(reads_processed);
+                    .with_progress_counter(reads_processed)
+                    .with_dropped_reads(dropped_tx, DROPPED_BATCH_THRESHOLD);
             (
                 fastq::Reader::new(r).process_parallel(&mut proc, n_threads),
                 proc.into_stats(),
@@ -98,7 +139,8 @@ pub fn edgelist<P: AsRef<Path>>(
         }
         FastqInput::Paired { r1, r2 } => {
             let mut proc = PairedProcessor::new(tx, BATCH_THRESHOLD, assay, panel, filters)
-                .with_progress_counter(reads_processed);
+                .with_progress_counter(reads_processed)
+                .with_dropped_reads(dropped_tx, DROPPED_BATCH_THRESHOLD);
             (
                 fastq::Reader::new(r1).process_parallel_paired(
                     fastq::Reader::new(r2),
@@ -110,13 +152,33 @@ pub fn edgelist<P: AsRef<Path>>(
         }
     };
 
+    // `into_stats` consumed the processor and with it every sender, which is what
+    // ends each writer's receive loop.
     let writer = handle.join().expect("parquet writer thread panicked");
+    let dropped_writer = dropped_handle
+        .map(|h| h.join().expect("dropped-reads writer thread panicked"))
+        .transpose();
 
     // Surface all errors that may have occured during processing and writing.
     pipeline?;
     writer?;
+    dropped_writer?;
 
     Ok(stats)
+}
+
+/// Spawns a thread that writes every batch received on `rx` to a Parquet file at
+/// `path`, finishing once all senders are gone.
+fn spawn_parquet_writer(
+    path: PathBuf,
+    schema: SchemaRef,
+    rx: Receiver<RecordBatch>,
+    properties: Option<WriterProperties>,
+) -> JoinHandle<Result<(), String>> {
+    thread::spawn(move || {
+        write_record_batches_to_path(path, schema, rx.into_iter(), properties)
+            .map_err(|e| e.to_string())
+    })
 }
 
 #[cfg(test)]
@@ -124,7 +186,7 @@ mod tests {
     use std::fs::File;
     use std::io::Cursor;
 
-    use arrow::array::{Array, DictionaryArray, StringArray};
+    use arrow::array::{Array, ArrayAccessor, DictionaryArray, StringArray};
     use arrow::datatypes::Int32Type;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use rustc_hash::FxHashMap as HashMap;
@@ -186,6 +248,7 @@ mod tests {
             tmpdir.path(),
             2,
             FilterConfig::default(),
+            false,
             Arc::new(AtomicU64::new(0)),
         )
         .expect("edgelist run");
@@ -367,5 +430,100 @@ mod tests {
 
         // Dropped reads are still measured, so QC covers all N reads.
         assert_eq!(stats.q30().total, 1.0);
+    }
+
+    /// With `save_dropped_reads`, every dropped pair lands in the side Parquet,
+    /// verbatim and under the reason the report tallies it by.
+    #[test]
+    fn edgelist_saves_dropped_reads_with_their_reason() {
+        let mix = ReadMixConfig {
+            frac_has_n: 0.1,
+            frac_unknown_pid: 0.1,
+            read_len: 150,
+        };
+        let pairs = proxiome_v2_read_pairs(N, mix, 0);
+        let input = FastqInput::Paired {
+            r1: Box::new(Cursor::new(records_to_fastq(
+                pairs.iter().map(|(r1, _)| r1),
+            ))),
+            r2: Box::new(Cursor::new(records_to_fastq(
+                pairs.iter().map(|(_, r2)| r2),
+            ))),
+        };
+
+        let tmpdir = tempfile::tempdir().expect("create tempdir");
+        let stats = edgelist(
+            input,
+            "sample".to_string(),
+            proxiome_v2_assay(),
+            proxiome_v2_panel(),
+            tmpdir.path(),
+            2,
+            FilterConfig::default(),
+            true,
+            Arc::new(AtomicU64::new(0)),
+        )
+        .expect("edgelist run");
+
+        let file = File::open(tmpdir.path().join("sample.dropped_reads.parquet"))
+            .expect("open dropped-reads parquet");
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).expect("parquet reader");
+        assert_eq!(
+            builder.schema().as_ref(),
+            DroppedReadBuffer::schema().as_ref()
+        );
+
+        let string_column = |batch: &RecordBatch, name: &str| -> StringArray {
+            batch
+                .column_by_name(name)
+                .expect("column present")
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("utf8 column")
+                .clone()
+        };
+
+        let mut rows = 0;
+        let mut per_reason: HashMap<String, usize> = HashMap::default();
+        for batch in builder.build().expect("build parquet reader") {
+            let batch = batch.expect("read record batch");
+            let names = string_column(&batch, "read_name");
+            let seq1 = string_column(&batch, "sequence");
+            let qual1 = string_column(&batch, "quality");
+            let seq2 = string_column(&batch, "sequence_2");
+            let qual2 = string_column(&batch, "quality_2");
+            let reasons = batch
+                .column_by_name("reason")
+                .expect("reason column")
+                .as_any()
+                .downcast_ref::<DictionaryArray<Int32Type>>()
+                .expect("dictionary-encoded reason")
+                .downcast_dict::<StringArray>()
+                .expect("string dictionary values");
+
+            for i in 0..batch.num_rows() {
+                // `records_to_fastq` names each record after its input position.
+                let index: usize = names.value(i)["read".len()..]
+                    .parse()
+                    .expect("read{i} name");
+                let (r1, r2) = &pairs[index];
+                assert_eq!(seq1.value(i).as_bytes(), r1.seq);
+                assert_eq!(qual1.value(i).as_bytes(), r1.qual);
+                assert_eq!(seq2.value(i).as_bytes(), r2.seq);
+                assert_eq!(qual2.value(i).as_bytes(), r2.qual);
+                *per_reason.entry(reasons.value(i).to_string()).or_insert(0) += 1;
+            }
+            rows += batch.num_rows();
+        }
+
+        assert!(rows > 0, "this mix is meant to drop reads");
+        assert_eq!(rows, stats.total_dropped_reads());
+        for (reason, count) in stats.dropped_by_frequency() {
+            assert_eq!(
+                per_reason.get(reason).copied().unwrap_or(0),
+                count,
+                "{reason}"
+            );
+        }
     }
 }

@@ -51,8 +51,10 @@ impl Extractor {
     /// take conjugate A from R1 (forward strand) and conjugate B from R2 (reverse
     /// strand); single-end reads take both conjugates from the one read at its
     /// strand.
-    pub fn extract<R: Record>(&self, read: Read<'_, R>) -> Result<Row, DropReason> {
-        let ((marker_idx1, umi1), (marker_idx2, umi2)) = match read {
+    pub fn extract<R: Record>(&self, read: &Read<'_, R>) -> Result<Row, DropReason> {
+        // Matching on `*read` binds the inner `&R`s directly; matching on `read`
+        // would bind `&&R`, which `extract_side` cannot take as a record.
+        let ((marker_idx1, umi1), (marker_idx2, umi2)) = match *read {
             Read::SingleForward(r) => (
                 self.extract_side(r, Strand::Forward, ConjugateSide::A)?,
                 self.extract_side(r, Strand::Forward, ConjugateSide::B)?,
@@ -182,7 +184,7 @@ mod tests {
         let n = ex.panel_searcher.panel().markers().len() as i32;
         for (r1, r2) in &records {
             let read = Read::Paired { r1: &r1, r2: &r2 };
-            let row = ex.extract(read).expect("valid pair should extract");
+            let row = ex.extract(&read).expect("valid pair should extract");
             // Indices must be valid positions in the panel's marker list.
             assert!((0..n).contains(&row.marker_idx1));
             assert!((0..n).contains(&row.marker_idx2));
@@ -204,7 +206,7 @@ mod tests {
         let n = ex.panel_searcher.panel().markers().len() as i32;
         for r in &records {
             let read = Read::SingleForward(&r);
-            let row = ex.extract(read).expect("valid pair should extract");
+            let row = ex.extract(&read).expect("valid pair should extract");
             // Indices must be valid positions in the panel's marker list.
             assert!((0..n).contains(&row.marker_idx1));
             assert!((0..n).contains(&row.marker_idx2));
@@ -226,7 +228,7 @@ mod tests {
         let n = ex.panel_searcher.panel().markers().len() as i32;
         for r in &records {
             let read = Read::SingleReverse(&r);
-            let row = ex.extract(read).expect("valid pair should extract");
+            let row = ex.extract(&read).expect("valid pair should extract");
             // Indices must be valid positions in the panel's marker list.
             assert!((0..n).contains(&row.marker_idx1));
             assert!((0..n).contains(&row.marker_idx2));
@@ -248,7 +250,7 @@ mod tests {
         let ex = extractor();
         for (r1, r2) in &records {
             let read = Read::Paired { r1: &r1, r2: &r2 };
-            assert_eq!(ex.extract(read), Err(DropReason::HasN));
+            assert_eq!(ex.extract(&read), Err(DropReason::HasN));
         }
     }
 
@@ -266,7 +268,7 @@ mod tests {
         let ex = extractor();
         for r in &records {
             let read = Read::SingleForward(&r);
-            assert_eq!(ex.extract(read), Err(DropReason::HasN));
+            assert_eq!(ex.extract(&read), Err(DropReason::HasN));
         }
     }
 
@@ -284,7 +286,7 @@ mod tests {
         let ex = extractor();
         for r in &records {
             let read = Read::SingleReverse(&r);
-            assert_eq!(ex.extract(read), Err(DropReason::HasN));
+            assert_eq!(ex.extract(&read), Err(DropReason::HasN));
         }
     }
 
@@ -306,7 +308,7 @@ mod tests {
 
         let ex = extractor();
         assert!(
-            ex.extract(Read::SingleForward(&rec_ref)).is_ok(),
+            ex.extract(&Read::SingleForward(&rec_ref)).is_ok(),
             "N in lbs-1 should be ignored"
         );
     }
@@ -328,7 +330,7 @@ mod tests {
             // Unknown pids are random bases; pid-1 is checked first, so the pair
             // drops there (with vanishing probability of a random panel hit).
             let read = Read::Paired { r1: &r1, r2: &r2 };
-            assert_eq!(ex.extract(read), Err(DropReason::Pid1NotInPanel));
+            assert_eq!(ex.extract(&read), Err(DropReason::Pid1NotInPanel));
         }
     }
 
@@ -348,7 +350,7 @@ mod tests {
             // Unknown pids are random bases; pid-1 is checked first, so the pair
             // drops there (with vanishing probability of a random panel hit).
             let read = Read::SingleForward(&r);
-            assert_eq!(ex.extract(read), Err(DropReason::Pid1NotInPanel));
+            assert_eq!(ex.extract(&read), Err(DropReason::Pid1NotInPanel));
         }
     }
 
@@ -368,7 +370,7 @@ mod tests {
             // Unknown pids are random bases; pid-1 is checked first, so the pair
             // drops there (with vanishing probability of a random panel hit).
             let read = Read::SingleReverse(&r);
-            assert_eq!(ex.extract(read), Err(DropReason::Pid1NotInPanel));
+            assert_eq!(ex.extract(&read), Err(DropReason::Pid1NotInPanel));
         }
     }
 
@@ -398,7 +400,7 @@ mod tests {
         );
         let rec_ref = &record;
         let baseline = exact
-            .extract(Read::SingleForward(&rec_ref))
+            .extract(&Read::SingleForward(&rec_ref))
             .expect("baseline read should extract");
 
         // Introduce a single mismatch at the start of the pid-1 region.
@@ -417,7 +419,7 @@ mod tests {
 
         // Under exact matching the mutated pid-1 is not in the panel.
         assert_eq!(
-            exact.extract(Read::SingleForward(&mutated_ref)),
+            exact.extract(&Read::SingleForward(&mutated_ref)),
             Err(DropReason::Pid1NotInPanel)
         );
 
@@ -431,7 +433,7 @@ mod tests {
             },
         );
         let recovered = fuzzy
-            .extract(Read::SingleForward(&mutated_ref))
+            .extract(&Read::SingleForward(&mutated_ref))
             .expect("near-match read should be recovered");
         assert_eq!(recovered.marker_idx1, baseline.marker_idx1);
     }
@@ -452,7 +454,7 @@ mod tests {
             // Unknown pids are random bases; pid-1 is checked first, so the pair
             // drops there (with vanishing probability of a random panel hit).
             let read = Read::SingleForward(&r);
-            assert_eq!(ex.extract(read), Err(DropReason::TooShort));
+            assert_eq!(ex.extract(&read), Err(DropReason::TooShort));
         }
     }
 
@@ -472,7 +474,7 @@ mod tests {
             // Unknown pids are random bases; pid-1 is checked first, so the pair
             // drops there (with vanishing probability of a random panel hit).
             let read = Read::SingleForward(&r);
-            assert_eq!(ex.extract(read), Err(DropReason::HasN));
+            assert_eq!(ex.extract(&read), Err(DropReason::HasN));
         }
     }
 
@@ -503,13 +505,13 @@ mod tests {
             let rev = &rev_owned;
 
             let row_fwd = ex
-                .extract(Read::SingleForward(&fwd))
+                .extract(&Read::SingleForward(&fwd))
                 .expect("single-forward should extract");
             let row_rev = ex
-                .extract(Read::SingleReverse(&rev))
+                .extract(&Read::SingleReverse(&rev))
                 .expect("single-reverse should extract");
             let row_paired = ex
-                .extract(Read::Paired { r1: &fwd, r2: &rev })
+                .extract(&Read::Paired { r1: &fwd, r2: &rev })
                 .expect("paired should extract");
 
             assert_eq!(row_fwd, row_rev, "single-forward vs single-reverse");
@@ -541,7 +543,7 @@ mod tests {
             },
         );
         assert_eq!(
-            ex.extract(Read::SingleForward(&rec_ref)),
+            ex.extract(&Read::SingleForward(&rec_ref)),
             Err(DropReason::LowQuality)
         );
     }
@@ -567,7 +569,7 @@ mod tests {
         );
         for r in &records {
             assert!(
-                ex.extract(Read::SingleForward(&r)).is_ok(),
+                ex.extract(&Read::SingleForward(&r)).is_ok(),
                 "Q40 read should pass min_avg_quality=30"
             );
         }
@@ -589,7 +591,7 @@ mod tests {
 
         let ex = extractor(); // min_avg_quality = None
         assert!(
-            ex.extract(Read::SingleForward(&rec_ref)).is_ok(),
+            ex.extract(&Read::SingleForward(&rec_ref)).is_ok(),
             "low-quality read should be kept when filter is disabled"
         );
     }
@@ -628,7 +630,7 @@ mod tests {
             },
         );
         assert!(
-            ex.extract(Read::SingleForward(&rec_ref)).is_ok(),
+            ex.extract(&Read::SingleForward(&rec_ref)).is_ok(),
             "low quality outside pid/umi must not drop the read"
         );
     }
@@ -656,7 +658,7 @@ mod tests {
         );
         for r in &records {
             assert_eq!(
-                ex.extract(Read::SingleForward(&r)),
+                ex.extract(&Read::SingleForward(&r)),
                 Err(DropReason::HasN),
                 "HasN is checked before LowQuality"
             );
@@ -689,7 +691,7 @@ mod tests {
             },
         );
         assert_eq!(
-            ex.extract(Read::SingleForward(&rec_ref)),
+            ex.extract(&Read::SingleForward(&rec_ref)),
             Err(DropReason::LowComplexity)
         );
     }
@@ -714,7 +716,7 @@ mod tests {
         );
         for r in &records {
             assert!(
-                ex.extract(Read::SingleForward(&r)).is_ok(),
+                ex.extract(&Read::SingleForward(&r)).is_ok(),
                 "random UMI should pass max_umi_base_freq=0.9"
             );
         }
@@ -739,7 +741,7 @@ mod tests {
 
         let ex = extractor(); // max_umi_base_freq = None
         assert!(
-            ex.extract(Read::SingleForward(&rec_ref)).is_ok(),
+            ex.extract(&Read::SingleForward(&rec_ref)).is_ok(),
             "all-A UMI should be kept when complexity filter is disabled"
         );
     }
@@ -772,7 +774,7 @@ mod tests {
             },
         );
         assert_eq!(
-            ex.extract(Read::SingleForward(&rec_ref)),
+            ex.extract(&Read::SingleForward(&rec_ref)),
             Err(DropReason::LbsOverlap)
         );
     }
@@ -811,7 +813,7 @@ mod tests {
             },
         );
         assert_eq!(
-            ex.extract(Read::SingleReverse(&rec_ref)),
+            ex.extract(&Read::SingleReverse(&rec_ref)),
             Err(DropReason::LbsOverlap)
         );
     }
@@ -845,7 +847,7 @@ mod tests {
             },
         );
         assert!(
-            ex.extract(Read::SingleForward(&rec_ref)).is_ok(),
+            ex.extract(&Read::SingleForward(&rec_ref)).is_ok(),
             "exact lbs-1 UMI should be kept when LBS filter is disabled"
         );
     }

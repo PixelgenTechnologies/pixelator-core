@@ -94,6 +94,12 @@ pub fn decode_dna_2bit(encoded: u64, length: usize) -> PyResult<String> {
 ///         Coverage caveat: only LBS references at least `umi_len - max_edits`
 ///         bases long are used, since a shorter reference would need more than
 ///         `max_edits` deletions to host the UMI.
+///     save_dropped_reads: Also write every dropped read to
+///         `<output_dir>/<sample_name>.dropped_reads.parquet`, with columns
+///         `read_name`, `sequence`, `quality`, `sequence_2`, `quality_2` and
+///         `reason`. Paired reads put R1 in `sequence`/`quality` and R2 in the
+///         `_2` columns, which are null for single-end input. `reason` holds the
+///         same names as the `dropped_by` statistics. Defaults to False.
 ///
 /// Returns:
 ///     The run's statistics, keyed to match the fields of
@@ -101,7 +107,7 @@ pub fn decode_dna_2bit(encoded: u64, length: usize) -> PyResult<String> {
 ///     `dropped_by`, `reads_per_marker_1` and `reads_per_marker_2`. The caller
 ///     turns these into the sample report.
 #[pyfunction]
-#[pyo3(signature = (read_forward, read_reverse, sample_name, assay, panel, output_dir, n_threads, mismatch_threshold=None, min_avg_quality=None, max_umi_base_freq=None, lbs_overlap_max_edits=6))]
+#[pyo3(signature = (read_forward, read_reverse, sample_name, assay, panel, output_dir, n_threads, mismatch_threshold=None, min_avg_quality=None, max_umi_base_freq=None, lbs_overlap_max_edits=6, save_dropped_reads=false))]
 #[allow(clippy::too_many_arguments)]
 pub fn run_edgelist<'py>(
     py: Python<'py>,
@@ -116,6 +122,7 @@ pub fn run_edgelist<'py>(
     min_avg_quality: Option<u8>,
     max_umi_base_freq: Option<f64>,
     lbs_overlap_max_edits: u8,
+    save_dropped_reads: bool,
 ) -> PyResult<Bound<'py, PyDict>> {
     let assay = convert::assay_from_py(&assay)?;
     let panel = convert::panel_from_py(&panel)?;
@@ -142,6 +149,7 @@ pub fn run_edgelist<'py>(
             output_dir,
             n_threads,
             filters,
+            save_dropped_reads,
             reads_processed,
         )
         .map_err(|e| e.to_string())

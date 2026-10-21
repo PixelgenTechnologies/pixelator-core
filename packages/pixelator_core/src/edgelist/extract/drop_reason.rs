@@ -40,6 +40,14 @@ impl DropReason {
         DropReason::LbsOverlap,
     ];
 
+    /// This reason's position in [`DropReason::ALL`], usable as a key into a
+    /// dictionary built from `ALL`'s names.
+    pub fn index(self) -> usize {
+        // Holds because `ALL` lists the variants in declaration order, which
+        // `index_is_the_position_in_all` checks.
+        self as usize
+    }
+
     /// The reason's snake_case name
     pub fn as_str(&self) -> &'static str {
         // Renaming one changes the report schema, so treat these as fixed.
@@ -78,6 +86,13 @@ mod tests {
                 DropReason::LbsOverlap => "lbs_overlap",
             };
             assert_eq!(reason.as_str(), expected);
+        }
+    }
+
+    #[test]
+    fn index_is_the_position_in_all() {
+        for (position, reason) in DropReason::ALL.into_iter().enumerate() {
+            assert_eq!(reason.index(), position, "{reason:?}");
         }
     }
 

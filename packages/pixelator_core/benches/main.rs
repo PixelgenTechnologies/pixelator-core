@@ -376,6 +376,7 @@ mod bench_edgelist {
                     tmp.path(),
                     N_THREADS,
                     FilterConfig::default(),
+                    false,
                     Arc::new(AtomicU64::new(0)),
                 )
                 .expect("edgelist run");

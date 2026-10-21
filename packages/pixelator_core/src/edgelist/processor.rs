@@ -8,7 +8,8 @@ use paraseq::prelude::*;
 
 use crate::common::{Assay, Panel};
 
-use super::extract::{Extractor, FilterConfig};
+use super::dropped_read_buffer::DroppedReadBuffer;
+use super::extract::{DropReason, Extractor, FilterConfig};
 use super::qc::QcProfiler;
 use super::read_layout::{Read, Strand};
 use super::row_buffer::RowBuffer;
@@ -54,6 +55,36 @@ impl Progress {
     }
 }
 
+/// Where the reads the extractor discards go when the run saves them: a buffer
+/// flushed to its own channel, so the dropped-reads Parquet is written by a
+/// writer thread of its own alongside the edgelist's.
+#[derive(Clone)]
+struct DroppedReadSink {
+    buffer: DroppedReadBuffer,
+    tx: SyncSender<RecordBatch>,
+    batch_threshold: usize,
+}
+
+impl DroppedReadSink {
+    fn new(tx: SyncSender<RecordBatch>, batch_threshold: usize) -> Self {
+        Self {
+            buffer: DroppedReadBuffer::new(batch_threshold),
+            tx,
+            batch_threshold,
+        }
+    }
+
+    fn flush_and_send(&mut self) -> Result<(), ProcessError> {
+        let batch = self
+            .buffer
+            .flush()
+            .map_err(IntoProcessError::into_process_error)?;
+        self.tx
+            .send(batch)
+            .map_err(IntoProcessError::into_process_error)
+    }
+}
+
 /// The mode-agnostic core shared by [`PairedProcessor`] and [`SingleProcessor`].
 ///
 /// Owns the batch machinery (row buffer, channel, stats, extractor) and all the
@@ -73,6 +104,10 @@ struct RowSink {
 
     extractor: Extractor,
     qc_profiler: QcProfiler,
+
+    /// `None` unless the run saves dropped reads, so the default path pays
+    /// nothing for the feature.
+    dropped: Option<DroppedReadSink>,
 }
 
 impl RowSink {
@@ -92,25 +127,33 @@ impl RowSink {
             progress: Progress::default(),
             extractor: Extractor::new(&assay, panel, filters),
             qc_profiler: QcProfiler::new(&assay),
+            dropped: None,
         }
     }
 
     /// Extracts one molecule from `read` and records the outcome: a valid row is
-    /// buffered and counted as kept; a [`DropReason`](super::extract::DropReason)
-    /// is tallied.
+    /// buffered and counted as kept; a [`DropReason`] is tallied, and the read
+    /// itself buffered when dropped reads are being saved.
     ///
     /// QC is measured first, ahead of the keep/drop decision, so that dropped
     /// reads still contribute to the quality totals.
     fn process<Rf: Record>(&mut self, read: Read<'_, Rf>) {
         self.progress.count_read();
         self.local_stats.add_qc(self.qc_profiler.eval(&read));
-        match self.extractor.extract(read) {
+        match self.extractor.extract(&read) {
             Ok(row) => {
                 self.buffer
                     .push(row.marker_idx1, row.marker_idx2, row.umi1, row.umi2);
                 self.local_stats.keep_read(row.marker_idx1, row.marker_idx2);
             }
-            Err(reason) => self.local_stats.drop_read(reason),
+            Err(reason) => self.drop_read(read, reason),
+        }
+    }
+
+    fn drop_read<Rf: Record>(&mut self, read: Read<'_, Rf>, reason: DropReason) {
+        self.local_stats.drop_read(reason);
+        if let Some(dropped) = &mut self.dropped {
+            dropped.buffer.push(read, reason);
         }
     }
 
@@ -124,23 +167,33 @@ impl RowSink {
             .map_err(IntoProcessError::into_process_error)
     }
 
-    /// Batch boundary (`on_batch_complete`): publishes progress and flushes the
-    /// buffer if it has reached the batch threshold.
+    /// Batch boundary (`on_batch_complete`): publishes progress and flushes each
+    /// buffer that has reached its batch threshold.
     fn finish_batch(&mut self) -> Result<(), ProcessError> {
         self.progress.publish();
         if self.buffer.len() >= self.batch_threshold {
             self.flush_and_send()?;
         }
+        if let Some(dropped) = &mut self.dropped
+            && dropped.buffer.len() >= dropped.batch_threshold
+        {
+            dropped.flush_and_send()?;
+        }
         Ok(())
     }
 
     /// End of thread (`on_thread_complete`): publishes the last of the progress,
-    /// flushes any trailing rows, and folds this worker's stats into the shared
-    /// tally.
+    /// flushes any trailing rows (kept and dropped), and folds this worker's
+    /// stats into the shared tally.
     fn finish_thread(&mut self) -> Result<(), ProcessError> {
         self.progress.publish();
         if !self.buffer.is_empty() {
             self.flush_and_send()?;
+        }
+        if let Some(dropped) = &mut self.dropped
+            && !dropped.buffer.is_empty()
+        {
+            dropped.flush_and_send()?;
         }
 
         let mut global_stats = self.global_stats.lock().expect("lock global stats");
@@ -173,6 +226,18 @@ impl PairedProcessor {
     /// Share `counter` across worker clones so a reporter can observe progress.
     pub fn with_progress_counter(mut self, counter: Arc<AtomicU64>) -> Self {
         self.sink.progress = Progress::new(counter);
+        self
+    }
+
+    /// Also send every dropped read, with its reason, down `tx` in batches of
+    /// about `batch_threshold` rows (see [`DroppedReadBuffer`] for the schema).
+    /// `None` leaves dropped reads unsaved, as without this call.
+    pub fn with_dropped_reads(
+        mut self,
+        tx: Option<SyncSender<RecordBatch>>,
+        batch_threshold: usize,
+    ) -> Self {
+        self.sink.dropped = tx.map(|tx| DroppedReadSink::new(tx, batch_threshold));
         self
     }
 
@@ -233,6 +298,18 @@ impl SingleProcessor {
     /// Share `counter` across worker clones so a reporter can observe progress.
     pub fn with_progress_counter(mut self, counter: Arc<AtomicU64>) -> Self {
         self.sink.progress = Progress::new(counter);
+        self
+    }
+
+    /// Also send every dropped read, with its reason, down `tx` in batches of
+    /// about `batch_threshold` rows (see [`DroppedReadBuffer`] for the schema).
+    /// `None` leaves dropped reads unsaved, as without this call.
+    pub fn with_dropped_reads(
+        mut self,
+        tx: Option<SyncSender<RecordBatch>>,
+        batch_threshold: usize,
+    ) -> Self {
+        self.sink.dropped = tx.map(|tx| DroppedReadSink::new(tx, batch_threshold));
         self
     }
 
