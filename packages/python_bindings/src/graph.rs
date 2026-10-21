@@ -1,0 +1,322 @@
+//! Bindings for graph statistics, connected components, and community detection.
+
+use pixelator_core::common::io::{
+    create_graph_and_umi_mapping_from_parquet_file, filter_out_crossing_edges_from_edge_list,
+    write_node_partitions_to_parquet,
+};
+use pyo3::prelude::*;
+
+use pixelator_core::common::graph::GraphProperties;
+use pixelator_core::common::node_partitioning::{
+    FastNodePartitioning, LeidenNodePartitioning, NodePartitioning,
+};
+use pixelator_core::fast_label_propagation::algorithm::fast_label_propagation;
+use pixelator_core::fast_label_propagation::strategies::{
+    AssignmentStrategy, DefaultAssignmentStrategy,
+};
+use pixelator_core::hybrid_community_detection::algorithm::hybrid_community_detection;
+use pixelator_core::leiden::algorithm::{leiden, ThresholdOptions};
+use pixelator_core::leiden::quality::modularity::Modularity;
+use pixelator_core::leiden::weighted_partitioned_graph::WeightedPartitionedGraph;
+
+use log::debug;
+
+use rustc_hash::FxHashMap as HashMap;
+
+use paste::paste;
+
+///
+/// Finds graph statistics from an edge list stored in a Parquet file.
+///
+/// # Arguments
+/// * `parquet_file` - Path to the Parquet file containing the edge list.
+///
+/// # Returns
+/// A tuple containing:
+/// * Number of nodes
+/// * Number of edges
+/// * Number of connected components
+/// * Fraction of nodes in the largest connected component
+///
+#[pyfunction]
+pub fn find_graph_statistics(parquet_file: &str) -> PyResult<(usize, usize, usize, f64)> {
+    let (_, graph) = create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
+
+    let graph_properties = GraphProperties::new(&graph);
+
+    Ok((
+        graph_properties.node_count,
+        graph_properties.edge_weight_sum,
+        graph_properties.n_connected_components,
+        graph_properties.fraction_in_largest_component,
+    ))
+}
+
+/// Generate a Python equivalent of a Rust dataclass, including a `from` method to convert between
+/// the two
+///
+/// NB: unfortunately you need to input all the fields and their type, since macros cannot fetch
+/// data other than what is provided to them. This macro prevents you from having to write the
+/// fields again in the from function.
+macro_rules! py_dataclass {
+    ($name:ident { $($field:ident: $ty:ty),* $(,)? }) => {
+        paste! {
+            #[pyo3::pyclass(get_all)]
+            pub struct [<Py $name>] {
+                $(
+                    pub $field: $ty
+                ),*
+            }
+
+            impl From<$name> for [<Py $name>] {
+                fn from($name { $($field),* }: $name) -> Self {
+                    Self { $($field),* }
+                }
+            }
+        }
+    };
+}
+
+py_dataclass!(GraphProperties {
+    edge_weight_sum: usize,
+    node_count: usize,
+    n_connected_components: usize,
+    fraction_in_largest_component: f64,
+    stranded_nodes: usize,
+    component_size_distribution: HashMap<usize, usize>,
+});
+
+/// Finds community partitioning by combining Fast Label Propagation (FLP), graph aggregation,
+/// and optionally the Leiden algorithm for multiplet recovery.
+///
+/// # Arguments
+/// * `parquet_file` - Path to the Parquet file containing the edge list.
+/// * `resolution` - Resolution parameter for the modularity quality function used in the Leiden
+/// algorithm. Larger values tend to yield smaller communities.
+/// * `output` - Path to the filtered edge-list Parquet file to write. Default is
+///   `filtered_edge_list.parquet`.
+/// * `flp_epochs` - Number of full passes of FLP on the original graph before aggregation.
+///   Default is 1.
+/// * `randomness` - Randomness of Leiden node moves when `multiplet_recovery` is true. Low values
+///   favor moves that improve quality; higher values allow suboptimal moves and can help escape
+///   local minima at the cost of convergence speed. Default is 0.1.
+/// * `seed` - Seed for the random number generator in the weighted partitioned graph (aggregation
+///   and Leiden). If `None`, the implementation uses a default seed of 0.
+/// * `max_iteration` - Maximum number of Leiden iterations when `multiplet_recovery` is true.
+///   In most cases the algorithm stops earlier once converged.
+/// * `multiplet_recovery` - If true, runs Leiden on the aggregated graph after FLP. If false,
+///   the pipeline stops after aggregation and the last statistics tuple matches the aggregated
+///   state without a Leiden refinement pass.
+///
+/// # Returns
+/// A tuple containing:
+/// * The path to the written Parquet file (same as `output`, or the default path).
+/// * Graph statistics on the input graph before multiplet recovery (pre-FLP).
+/// * Graph statistics after FLP and aggregation.
+/// * Graph statistics after Leiden when `multiplet_recovery` is true, otherwise graph
+///   statistics after aggregation.
+///
+/// The node partitioning is written in a Parquet file as specified by the `output` parameter.
+#[pyfunction(signature = (
+    parquet_file,
+    resolution,
+    multiplet_recovery,
+    output="filtered_edge_list.parquet",
+    flp_epochs=1,
+    randomness=0.1,
+    seed=None,
+    max_iteration=None
+))]
+#[allow(clippy::too_many_arguments)]
+pub fn run_hybrid_community_detection(
+    parquet_file: &str,
+    resolution: f64,
+    multiplet_recovery: bool,
+    output: &str,
+    flp_epochs: u64,
+    randomness: f64,
+    seed: Option<u64>,
+    max_iteration: Option<usize>,
+) -> PyResult<(
+    String,
+    PyGraphProperties,
+    PyGraphProperties,
+    PyGraphProperties,
+)> {
+    let (umi_mapping, graph) = create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
+    let quality_function = Modularity::new(resolution, graph.get_total_edge_weight());
+
+    let pre_recovery_properties = GraphProperties::new(&graph);
+
+    let (node_partition, post_flp_statistics, post_leiden_statistics) = hybrid_community_detection(
+        graph,
+        quality_function,
+        randomness,
+        seed,
+        max_iteration,
+        flp_epochs,
+        false,
+        multiplet_recovery,
+    );
+
+    // NB: technically, crossing edges are not removed from the graph until the edge list is saved
+    // to parquet. The statistics below are adjusted to exclude such crossing edges.
+    let post_flp_properties = GraphProperties::from(post_flp_statistics);
+    let post_recovery_properties = GraphProperties::from(post_leiden_statistics);
+
+    debug!("Writing data to parquet {}", output);
+    filter_out_crossing_edges_from_edge_list(&parquet_file, &output, &node_partition, &umi_mapping)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{:?}", e)))?;
+    Ok((
+        output.to_string(),
+        PyGraphProperties::from(pre_recovery_properties),
+        PyGraphProperties::from(post_flp_properties),
+        PyGraphProperties::from(post_recovery_properties),
+    ))
+}
+
+/// Finds the connected components of a graph.
+///
+/// # Arguments
+/// * `parquet_file` - Path to the Parquet file containing the edge list.
+/// * `output` - Path to the output parquet file. Default is `node_partitions.parquet`.
+///
+/// # Returns
+/// * The number of connected components found.
+///
+/// The node partitioning (one partition per connected component) is written in a Parquet
+/// file as specified by the `output` parameter.
+#[pyfunction(signature = (
+    parquet_file,
+    output="node_partitions.parquet"
+))]
+pub fn run_connected_components(parquet_file: &str, output: &str) -> PyResult<usize> {
+    let (umi_mapping, graph) = create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
+
+    let node_to_component = graph.connected_components();
+    let node_partition = FastNodePartitioning::initialize_from_partitions(node_to_component);
+
+    write_node_partitions_to_parquet(output, &node_partition, &umi_mapping, None)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{:?}", e)))?;
+
+    Ok(node_partition.num_partitions())
+}
+
+/// Finds community partitioning using the Fast Label Propagation (FLP) algorithm.
+///
+/// # Arguments
+/// * `parquet_file` - Path to the Parquet file containing the edge list.
+/// * `epochs` - Number of times FLP is run. Default is once.
+/// * `output` - Path to the output parquet file. Default is `node_partitions.parquet`.
+///
+/// # Returns
+/// * The number of partitions
+///
+/// The node partitioning is written in a Parquet file as specified by the `output` parameter.
+#[pyfunction(signature = (
+    parquet_file,
+    epochs=1,
+    output="node_partitions.parquet"
+))]
+pub fn run_label_propagation(parquet_file: &str, epochs: u64, output: &str) -> PyResult<usize> {
+    let (umi_mapping, graph) = create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
+
+    let node_partition =
+        FastNodePartitioning::initialize_with_singlet_partitions(graph.get_num_nodes());
+    let assignment_strategy: &dyn AssignmentStrategy<_> = &DefaultAssignmentStrategy;
+
+    let node_partition =
+        fast_label_propagation(&graph, epochs, assignment_strategy, node_partition);
+
+    write_node_partitions_to_parquet(output, &node_partition, &umi_mapping, None)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{:?}", e)))?;
+
+    Ok(node_partition.num_partitions())
+}
+
+/// Finds community partitioning using the Leiden algorithm
+///
+/// # Arguments
+/// * `parquet_file` - Path to the Parquet file containing the edge list.
+/// * `max_iteration` - maximum number of iterations to perform. NB: in most cases the algorithm
+/// should converge and stop by itself.
+/// * `partition` - initial node partitioning to use. If not provided, singlet partitions will be
+/// used. Supplied ids are renumbered to `0..k-1` in sorted label order before Leiden runs;
+/// nodes that shared a label still share one.
+/// * `resolution` - resolution to use in the quality function. The larger the resolution, the
+/// smaller the resulting communities will be.
+/// * `output` - Path to the output parquet file. Default is `node_partitions.parquet`.
+/// * `randomness` - Randomness of node transitions. Low values will favor moves maximizing the
+/// quality, while higher values will allow suboptimal moves, making it easier to avoid local
+/// minima at the cost of convergence speed. Default value is 0.1
+/// * `seed` - seed to use in the random generator
+/// * `merge_edge_threshold` - Merge communities when their connecting edge count exceeds this
+///   absolute threshold. Cannot be used together with `merge_edge_threshold_relative`.
+/// * `merge_edge_threshold_relative` - Merge communities when their connecting edge relative to the
+/// number of nodes in the smallest community exceeds this threshold. Cannot be used together with
+/// `merge_edge_threshold`.
+///
+/// Merging is only applied when the algorithm converges, not when it is stopped by `max_iteration`.
+///
+/// # Returns
+/// A tuple containing:
+/// * The number of partitions
+/// * The overall quality of the partitioning
+///
+/// The node partitioning is written in a Parquet file as specified by the `output` parameter.
+#[pyfunction(signature = (
+    parquet_file,
+    resolution,
+    max_iteration=None,
+    partition=None,
+    output="node_partitions.parquet",
+    randomness=0.1,
+    seed=None,
+    merge_edge_threshold=None,
+    merge_edge_threshold_relative=None
+))]
+#[allow(clippy::too_many_arguments)]
+pub fn run_leiden(
+    parquet_file: &str,
+    resolution: f64,
+    max_iteration: Option<usize>,
+    partition: Option<Vec<usize>>,
+    output: &str,
+    randomness: f64,
+    seed: Option<u64>,
+    merge_edge_threshold: Option<usize>,
+    merge_edge_threshold_relative: Option<f64>,
+) -> PyResult<(usize, f64)> {
+    let merge_threshold = match (merge_edge_threshold, merge_edge_threshold_relative) {
+        (Some(_), Some(_)) => {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "`merge_edge_threshold` and `merge_edge_threshold_relative` cannot both be used at the same time",
+        ));
+        }
+        (Some(v), None) => Some(ThresholdOptions::Absolute(v)),
+        (None, Some(v)) => Some(ThresholdOptions::Relative(v)),
+        (None, None) => None,
+    };
+
+    let (umi_mapping, graph) =
+        create_graph_and_umi_mapping_from_parquet_file::<usize>(parquet_file);
+
+    let partition = if let Some(node_partition_map) = partition {
+        LeidenNodePartitioning::initialize_from_partitions(node_partition_map)
+    } else {
+        LeidenNodePartitioning::initialize_with_singlet_partitions(graph.get_num_nodes())
+    };
+    let quality_function = Modularity::new(resolution, graph.get_total_edge_weight());
+
+    let mut wp_graph =
+        WeightedPartitionedGraph::new(graph, partition, quality_function, None, seed);
+
+    leiden(&mut wp_graph, randomness, max_iteration, merge_threshold);
+
+    let node_partition =
+        FastNodePartitioning::initialize_from_partitions(wp_graph.get_ancestor_to_partition_map());
+    write_node_partitions_to_parquet(output, &node_partition, &umi_mapping, None)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{:?}", e)))?;
+
+    Ok((node_partition.num_partitions(), wp_graph.quality()))
+}

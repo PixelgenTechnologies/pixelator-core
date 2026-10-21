@@ -27,6 +27,9 @@ def test_public_api() -> None:
         "run_label_propagation",
         "run_leiden",
         "run_hybrid_community_detection",
+        "run_edgelist",
+        "encode_dna_2bit",
+        "decode_dna_2bit",
         "PyGraphProperties",
         "__version__",
     ):
@@ -169,3 +172,20 @@ def test_run_hybrid_community_detection(small_parquet_path: str, tmp_path: Path)
         assert stats.edge_weight_sum > 0
         assert stats.n_connected_components >= 1
         assert 0.0 < stats.fraction_in_largest_component <= 1.0
+
+
+def test_encode_decode_dna_2bit() -> None:
+    sequences = ["", "A", "ACGT", "ACGTACGTACGTACGTACGTACGTACGTACGT"]
+    for seq in sequences:
+        encoded = pixelator_core.encode_dna_2bit(seq)
+        assert pixelator_core.decode_dna_2bit(encoded, len(seq)) == seq
+
+
+def test_encode_dna_2bit_rejects_invalid_bases() -> None:
+    with pytest.raises(ValueError):
+        pixelator_core.encode_dna_2bit("AN")
+
+
+def test_decode_dna_2bit_rejects_length_beyond_u64() -> None:
+    with pytest.raises(ValueError):
+        pixelator_core.decode_dna_2bit(0, 33)

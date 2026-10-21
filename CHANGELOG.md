@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Edgelist binding
+- Optional Parquet of reads dropped while building an edgelist.
 - Peak-heap CI benchmarks for graph construction, fast label propagation, and Leiden.
 - Fast-forward `dev` to `main` after release PRs.
 
