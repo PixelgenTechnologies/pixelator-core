@@ -47,8 +47,9 @@ impl AssignmentStrategy<FastNodePartitioning> for DefaultAssignmentStrategy {
         // Finding the most common partition among neighbors by sorting and picking the mode
         // from the vector is more efficient than using a hash map to count occurrences
         // for thse small vectors we expect here.
-        let most_common_neighbors_partition = mode_via_sort(partitions.as_mut_slice());
         let node_i_current_partition = node_partition.get_partition_for_node(&current_node);
+        let most_common_neighbors_partition =
+            mode_via_sort(partitions.as_mut_slice(), Some(node_i_current_partition));
 
         if most_common_neighbors_partition != node_i_current_partition {
             node_partition.update_partition(current_node, most_common_neighbors_partition);
@@ -97,5 +98,24 @@ mod tests {
         assert!(p0 == p1 || p0 == p2);
 
         assert!(!queue.is_empty());
+    }
+
+    #[test]
+    fn test_assign_keeps_current_partition_on_tie() {
+        // Node 0 is connected to node 1 (partition 0) and node 2 (partition 1), creating a 1-1 tie.
+        let edges = edges_from_tuples(vec![(0, 1), (0, 2)]);
+        let graph = Graph::from_edges(edges.into_iter(), 3);
+        let strategy = DefaultAssignmentStrategy;
+
+        for _ in 0..50 {
+            let mut partition = FastNodePartitioning::initialize_from_partitions(vec![0, 0, 1]);
+            let mut queue = NodeQueue::from(vec![0, 1, 2]);
+            let _ = queue.pop_front(); // pop node 0
+
+            strategy.assign(&graph, &mut partition, &mut queue, 0);
+
+            assert_eq!(partition.get_partition_for_node(&0), 0);
+            assert!(!queue.contains(0));
+        }
     }
 }

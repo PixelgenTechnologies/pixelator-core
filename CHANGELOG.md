@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fast label propagation, connected-component export, and graph statistics are faster and use less memory on large graphs. On the 40-cell mix, label propagation went from 2.17 s to 1.60 s and its peak heap from 134 MB to 56 MB. Leiden is unchanged.
 - Building a graph from a parquet edge list reads the file only once.
 - Leiden is faster and uses less peak memory on large graphs.
+- Fast label propagation keeps a node's current partition when tied for the most common neighbor partition, avoiding boundary tie-oscillation.
 
 ## [0.2.0] - 2026-09-14
 
