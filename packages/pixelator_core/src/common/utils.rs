@@ -7,13 +7,15 @@ use rand::prelude::*;
 
 use crate::common::types::NodeIdx;
 
-/// Returns the mode (most common value) of a mutable slice of usize, breaking ties randomly.
+/// Returns the mode (most common value) of a mutable slice of usize, breaking ties randomly
+/// unless `preferred` is among the tied most common values, in which case `preferred` is returned.
 ///
 /// The function sorts the input slice in-place, then finds the value that appears most frequently.
-/// If there are multiple values with the same highest frequency, one is chosen at random.
+/// If there are multiple values with the same highest frequency, one is chosen at random unless
+/// `preferred` is one of them.
 /// This is efficient for small slices and avoids heap allocation for counting.
 ///
-pub fn mode_via_sort(numbers: &mut [usize]) -> usize {
+pub fn mode_via_sort(numbers: &mut [usize], preferred: Option<usize>) -> usize {
     if numbers.is_empty() {
         panic!("No numbers to choose from, `numbers` is empty");
     }
@@ -27,11 +29,17 @@ pub fn mode_via_sort(numbers: &mut [usize]) -> usize {
             Ordering::Less => ((best_count, best_n), ties),
             Ordering::Greater => ((c, n), 1),
             Ordering::Equal => {
-                let ties = ties + 1;
-                if rng.random_bool(1. / ties as f64) {
-                    ((c, n), ties)
-                } else {
+                if preferred == Some(best_n) {
                     ((best_count, best_n), ties)
+                } else if preferred == Some(n) {
+                    ((c, n), 1)
+                } else {
+                    let ties = ties + 1;
+                    if rng.random_bool(1. / ties as f64) {
+                        ((c, n), ties)
+                    } else {
+                        ((best_count, best_n), ties)
+                    }
                 }
             }
         },
@@ -115,7 +123,7 @@ mod tests {
     #[test]
     fn test_mode_via_sort_basic() {
         let mut data = vec![1, 2, 2, 3];
-        let mode = mode_via_sort(&mut data);
+        let mode = mode_via_sort(&mut data, None);
         assert_eq!(mode, 2);
     }
 
@@ -123,14 +131,34 @@ mod tests {
     fn test_mode_via_sort_tie() {
         // Both 1 and 2 appear twice, so either is valid
         let mut data = vec![1, 2, 1, 2, 3];
-        let mode = mode_via_sort(&mut data);
+        let mode = mode_via_sort(&mut data, None);
         assert!(mode == 1 || mode == 2);
+    }
+
+    #[test]
+    fn test_mode_via_sort_tie_prefers_preferred_value() {
+        for preferred in [1, 2, 3] {
+            for _ in 0..50 {
+                let mut data = vec![3, 1, 2, 1, 2, 3];
+                let mode = mode_via_sort(&mut data, Some(preferred));
+                assert_eq!(mode, preferred);
+            }
+        }
+    }
+
+    #[test]
+    fn test_mode_via_sort_preferred_not_in_max_tie_is_ignored() {
+        let mut data = vec![1, 2, 2, 3, 3];
+        for _ in 0..20 {
+            let mode = mode_via_sort(&mut data, Some(1));
+            assert!(mode == 2 || mode == 3);
+        }
     }
 
     #[test]
     fn test_mode_via_sort_single_element() {
         let mut data = vec![42];
-        let mode = mode_via_sort(&mut data);
+        let mode = mode_via_sort(&mut data, None);
         assert_eq!(mode, 42);
     }
 
@@ -138,7 +166,7 @@ mod tests {
     #[should_panic]
     fn test_mode_via_sort_empty_panics() {
         let mut data: Vec<usize> = vec![];
-        let _ = mode_via_sort(&mut data);
+        let _ = mode_via_sort(&mut data, None);
     }
 
     #[test]

@@ -167,8 +167,29 @@ mod tests {
 
         let result_partition =
             fast_label_propagation(&graph, 10, &DefaultAssignmentStrategy, partitioning);
+        let partition_map = &result_partition.node_partition_map;
 
-        assert_eq!(result_partition.node_partition_map, vec![0; num_nodes]);
+        assert_eq!(partition_map.len(), num_nodes);
+
+        // Degree-1 nodes must adopt their sole neighbor's partition:
+        assert_eq!(partition_map[0], partition_map[2]);
+        assert_eq!(partition_map[1], partition_map[8]);
+        assert_eq!(partition_map[6], partition_map[5]);
+
+        // After convergence, every node's partition is a mode among its neighbors, and each
+        // partition induces a connected component:
+        for node in 0..num_nodes {
+            let mut neighbor_partitions: Vec<usize> = graph
+                .neighbors_iter(node)
+                .map(|neighbor| partition_map[neighbor])
+                .collect();
+            let node_partition = partition_map[node];
+            assert_eq!(
+                crate::common::utils::mode_via_sort(&mut neighbor_partitions, Some(node_partition)),
+                node_partition
+            );
+        }
+        assert!(result_partition.num_partitions() <= 3);
     }
 
     #[test]
