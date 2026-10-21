@@ -133,7 +133,7 @@ fn run_flp(
     parquet_file: &String,
     epochs: &Option<u64>,
     output: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("Running FLP");
     info!("Input arguments were:");
     info!("  Parquet file: {}", parquet_file);
@@ -176,7 +176,7 @@ fn run_leiden(
     seed: Option<u64>,
     max_iterations: Option<usize>,
     output: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("Running leiden");
     info!("Input arguments were:");
     info!("  Parquet file: {}", parquet_file);

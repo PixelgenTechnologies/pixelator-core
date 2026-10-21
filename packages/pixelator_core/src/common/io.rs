@@ -35,7 +35,7 @@ pub struct ParquetUMIPairIter {
 }
 
 impl ParquetUMIPairIter {
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let file = File::open(path)?;
 
         let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
@@ -115,7 +115,7 @@ pub fn write_record_batches_to_path<P: AsRef<Path>, I>(
     schema: SchemaRef,
     record_batches: I,
     properties: Option<WriterProperties>,
-) -> Result<(), Box<dyn std::error::Error>>
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 where
     I: Iterator<Item = RecordBatch>,
 {
@@ -143,7 +143,7 @@ pub fn filter_out_crossing_edges_from_edge_list<PIn: AsRef<Path>, POut: AsRef<Pa
     output_path: &POut,
     node_partitioning: &T,
     mapping: &UmiToNodeIndexMapping,
-) -> Result<(), Box<dyn std::error::Error>>
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 where
     T: NodePartitioning,
 {
@@ -222,7 +222,7 @@ pub fn write_node_partitions_to_parquet<P: AsRef<Path>, T>(
     node_partitioning: &T,
     mapping: &UmiToNodeIndexMapping,
     batch_size: Option<usize>,
-) -> Result<(), Box<dyn std::error::Error>>
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 where
     T: NodePartitioning,
 {

@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Building a graph from a parquet edge list reads the file only once.
 - Leiden is faster and uses less peak memory on large graphs.
 
+### Fixed
+
+- Release the Python GIL in `find_graph_statistics`, `run_connected_components`, `run_label_propagation`, `run_leiden`, and `run_hybrid_community_detection` so background Python threads (such as `pixelator`'s socket log listener) are not starved during native graph I/O and community detection, and use `pyo3_log::Caching::Loggers` so Python logging level changes after module import are respected.
+
 ## [0.2.0] - 2026-09-14
 
 ### Added

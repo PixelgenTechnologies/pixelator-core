@@ -52,10 +52,20 @@ mod pixelator_core_py {
 
     #[pymodule_init]
     fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
-        pyo3_log::init();
+        pyo3_log::Logger::new(m.py(), pyo3_log::Caching::Loggers)?
+            .install()
+            .expect("Someone installed a logger before pixelator_core");
         m.add("__version__", env!("CARGO_PKG_VERSION"))?;
         Ok(())
     }
+}
+
+fn detach_io<T: Send>(
+    py: Python<'_>,
+    f: impl FnOnce() -> Result<T, Box<dyn std::error::Error + Send + Sync>> + pyo3::marker::Ungil,
+) -> PyResult<T> {
+    py.detach(f)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{:?}", e)))
 }
 
 ///
@@ -72,10 +82,14 @@ mod pixelator_core_py {
 /// * Fraction of nodes in the largest connected component
 ///
 #[pyfunction]
-pub fn find_graph_statistics(parquet_file: &str) -> PyResult<(usize, usize, usize, f64)> {
-    let (_, graph) = create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
-
-    let graph_properties = GraphProperties::new(&graph);
+pub fn find_graph_statistics(
+    py: Python<'_>,
+    parquet_file: &str,
+) -> PyResult<(usize, usize, usize, f64)> {
+    let graph_properties = py.detach(|| {
+        let (_, graph) = create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
+        GraphProperties::new(&graph)
+    });
 
     Ok((
         graph_properties.node_count,
@@ -162,6 +176,7 @@ py_dataclass!(GraphProperties {
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn run_hybrid_community_detection(
+    py: Python<'_>,
     parquet_file: &str,
     resolution: f64,
     multiplet_recovery: bool,
@@ -176,36 +191,45 @@ pub fn run_hybrid_community_detection(
     PyGraphProperties,
     PyGraphProperties,
 )> {
-    let (umi_mapping, graph) = create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
-    let quality_function = Modularity::new(resolution, graph.get_total_edge_weight());
+    detach_io(py, || {
+        let (umi_mapping, graph) =
+            create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
+        let quality_function = Modularity::new(resolution, graph.get_total_edge_weight());
 
-    let pre_recovery_properties = GraphProperties::new(&graph);
+        let pre_recovery_properties = GraphProperties::new(&graph);
 
-    let (node_partition, post_flp_statistics, post_leiden_statistics) = hybrid_community_detection(
-        graph,
-        quality_function,
-        randomness,
-        seed,
-        max_iteration,
-        flp_epochs,
-        false,
-        multiplet_recovery,
-    );
+        let (node_partition, post_flp_statistics, post_leiden_statistics) =
+            hybrid_community_detection(
+                graph,
+                quality_function,
+                randomness,
+                seed,
+                max_iteration,
+                flp_epochs,
+                false,
+                multiplet_recovery,
+            );
 
-    // NB: technically, crossing edges are not removed from the graph until the edge list is saved
-    // to parquet. The statistics below are adjusted to exclude such crossing edges.
-    let post_flp_properties = GraphProperties::from(post_flp_statistics);
-    let post_recovery_properties = GraphProperties::from(post_leiden_statistics);
+        // NB: technically, crossing edges are not removed from the graph until the edge list is saved
+        // to parquet. The statistics below are adjusted to exclude such crossing edges.
+        let post_flp_properties = GraphProperties::from(post_flp_statistics);
+        let post_recovery_properties = GraphProperties::from(post_leiden_statistics);
 
-    debug!("Writing data to parquet {}", output);
-    filter_out_crossing_edges_from_edge_list(&parquet_file, &output, &node_partition, &umi_mapping)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{:?}", e)))?;
-    Ok((
-        output.to_string(),
-        PyGraphProperties::from(pre_recovery_properties),
-        PyGraphProperties::from(post_flp_properties),
-        PyGraphProperties::from(post_recovery_properties),
-    ))
+        debug!("Writing data to parquet {}", output);
+        filter_out_crossing_edges_from_edge_list(
+            &parquet_file,
+            &output,
+            &node_partition,
+            &umi_mapping,
+        )?;
+
+        Ok((
+            output.to_string(),
+            PyGraphProperties::from(pre_recovery_properties),
+            PyGraphProperties::from(post_flp_properties),
+            PyGraphProperties::from(post_recovery_properties),
+        ))
+    })
 }
 
 /// Finds the connected components of a graph.
@@ -223,16 +247,22 @@ pub fn run_hybrid_community_detection(
     parquet_file,
     output="node_partitions.parquet"
 ))]
-pub fn run_connected_components(parquet_file: &str, output: &str) -> PyResult<usize> {
-    let (umi_mapping, graph) = create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
+pub fn run_connected_components(
+    py: Python<'_>,
+    parquet_file: &str,
+    output: &str,
+) -> PyResult<usize> {
+    detach_io(py, || {
+        let (umi_mapping, graph) =
+            create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
 
-    let node_to_component = graph.connected_components();
-    let node_partition = FastNodePartitioning::initialize_from_partitions(node_to_component);
+        let node_to_component = graph.connected_components();
+        let node_partition = FastNodePartitioning::initialize_from_partitions(node_to_component);
 
-    write_node_partitions_to_parquet(output, &node_partition, &umi_mapping, None)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{:?}", e)))?;
+        write_node_partitions_to_parquet(output, &node_partition, &umi_mapping, None)?;
 
-    Ok(node_partition.num_partitions())
+        Ok(node_partition.num_partitions())
+    })
 }
 
 /// Finds community partitioning using the Fast Label Propagation (FLP) algorithm.
@@ -251,20 +281,27 @@ pub fn run_connected_components(parquet_file: &str, output: &str) -> PyResult<us
     epochs=1,
     output="node_partitions.parquet"
 ))]
-pub fn run_label_propagation(parquet_file: &str, epochs: u64, output: &str) -> PyResult<usize> {
-    let (umi_mapping, graph) = create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
+pub fn run_label_propagation(
+    py: Python<'_>,
+    parquet_file: &str,
+    epochs: u64,
+    output: &str,
+) -> PyResult<usize> {
+    detach_io(py, || {
+        let (umi_mapping, graph) =
+            create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
 
-    let node_partition =
-        FastNodePartitioning::initialize_with_singlet_partitions(graph.get_num_nodes());
-    let assignment_strategy: &dyn AssignmentStrategy<_> = &DefaultAssignmentStrategy;
+        let node_partition =
+            FastNodePartitioning::initialize_with_singlet_partitions(graph.get_num_nodes());
+        let assignment_strategy: &dyn AssignmentStrategy<_> = &DefaultAssignmentStrategy;
 
-    let node_partition =
-        fast_label_propagation(&graph, epochs, assignment_strategy, node_partition);
+        let node_partition =
+            fast_label_propagation(&graph, epochs, assignment_strategy, node_partition);
 
-    write_node_partitions_to_parquet(output, &node_partition, &umi_mapping, None)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{:?}", e)))?;
+        write_node_partitions_to_parquet(output, &node_partition, &umi_mapping, None)?;
 
-    Ok(node_partition.num_partitions())
+        Ok(node_partition.num_partitions())
+    })
 }
 
 /// Finds community partitioning using the Leiden algorithm
@@ -310,6 +347,7 @@ pub fn run_label_propagation(parquet_file: &str, epochs: u64, output: &str) -> P
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn run_leiden(
+    py: Python<'_>,
     parquet_file: &str,
     resolution: f64,
     max_iteration: Option<usize>,
@@ -322,34 +360,36 @@ pub fn run_leiden(
 ) -> PyResult<(usize, f64)> {
     let merge_threshold = match (merge_edge_threshold, merge_edge_threshold_relative) {
         (Some(_), Some(_)) => {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "`merge_edge_threshold` and `merge_edge_threshold_relative` cannot both be used at the same time",
-        ));
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "`merge_edge_threshold` and `merge_edge_threshold_relative` cannot both be used at the same time",
+            ));
         }
         (Some(v), None) => Some(ThresholdOptions::Absolute(v)),
         (None, Some(v)) => Some(ThresholdOptions::Relative(v)),
         (None, None) => None,
     };
 
-    let (umi_mapping, graph) =
-        create_graph_and_umi_mapping_from_parquet_file::<usize>(parquet_file);
+    detach_io(py, || {
+        let (umi_mapping, graph) =
+            create_graph_and_umi_mapping_from_parquet_file::<usize>(parquet_file);
 
-    let partition = if let Some(node_partition_map) = partition {
-        LeidenNodePartitioning::initialize_from_partitions(node_partition_map)
-    } else {
-        LeidenNodePartitioning::initialize_with_singlet_partitions(graph.get_num_nodes())
-    };
-    let quality_function = Modularity::new(resolution, graph.get_total_edge_weight());
+        let partition = if let Some(node_partition_map) = partition {
+            LeidenNodePartitioning::initialize_from_partitions(node_partition_map)
+        } else {
+            LeidenNodePartitioning::initialize_with_singlet_partitions(graph.get_num_nodes())
+        };
+        let quality_function = Modularity::new(resolution, graph.get_total_edge_weight());
 
-    let mut wp_graph =
-        WeightedPartitionedGraph::new(graph, partition, quality_function, None, seed);
+        let mut wp_graph =
+            WeightedPartitionedGraph::new(graph, partition, quality_function, None, seed);
 
-    leiden(&mut wp_graph, randomness, max_iteration, merge_threshold);
+        leiden(&mut wp_graph, randomness, max_iteration, merge_threshold);
 
-    let node_partition =
-        FastNodePartitioning::initialize_from_partitions(wp_graph.get_ancestor_to_partition_map());
-    write_node_partitions_to_parquet(output, &node_partition, &umi_mapping, None)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{:?}", e)))?;
+        let node_partition = FastNodePartitioning::initialize_from_partitions(
+            wp_graph.get_ancestor_to_partition_map(),
+        );
+        write_node_partitions_to_parquet(output, &node_partition, &umi_mapping, None)?;
 
-    Ok((node_partition.num_partitions(), wp_graph.quality()))
+        Ok((node_partition.num_partitions(), wp_graph.quality()))
+    })
 }
