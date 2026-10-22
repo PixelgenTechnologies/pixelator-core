@@ -1,42 +1,81 @@
-use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::fmt;
 
-use itertools::Itertools;
-use rand::prelude::*;
-
 use crate::common::types::NodeIdx;
 
-/// Returns the mode (most common value) of a mutable slice of usize, breaking ties randomly.
+/// Returns the mode of `numbers`, breaking ties deterministically by picking
+/// the smallest value.
 ///
-/// The function sorts the input slice in-place, then finds the value that appears most frequently.
-/// If there are multiple values with the same highest frequency, one is chosen at random.
-/// This is efficient for small slices and avoids heap allocation for counting.
-///
-pub fn mode_via_sort(numbers: &mut [usize]) -> usize {
-    if numbers.is_empty() {
-        panic!("No numbers to choose from, `numbers` is empty");
-    }
-
-    numbers.sort_unstable();
-
-    let mut rng = rand::rng();
-    let ((_, best_n), _) = numbers.iter().dedup_with_count().fold(
-        ((0, 0), 0),
-        |((best_count, best_n), ties), (c, &n)| match c.cmp(&best_count) {
-            Ordering::Less => ((best_count, best_n), ties),
-            Ordering::Greater => ((c, n), 1),
-            Ordering::Equal => {
-                let ties = ties + 1;
-                if rng.random_bool(1. / ties as f64) {
-                    ((c, n), ties)
-                } else {
-                    ((best_count, best_n), ties)
-                }
-            }
-        },
+/// The function sorts the input slice in-place, then scans contiguous runs of equal
+/// values. Because `numbers` is sorted ascending, the first distinct value to achieve
+/// the maximum run length is guaranteed to be the smallest tied mode.
+#[inline]
+pub fn mode_smallest(numbers: &mut [usize]) -> usize {
+    assert!(
+        !numbers.is_empty(),
+        "No numbers to choose from, `numbers` is empty"
     );
+    numbers.sort_unstable();
+    let mut best_count = 0usize;
+    let mut best_n = numbers[0];
+    let mut i = 0;
+    let len = numbers.len();
+    while i < len {
+        let val = numbers[i];
+        let mut j = i + 1;
+        while j < len && numbers[j] == val {
+            j += 1;
+        }
+        let count = j - i;
+        if count > best_count {
+            best_count = count;
+            best_n = val;
+        }
+        i = j;
+    }
     best_n
+}
+
+/// Returns the mode of `numbers`, retaining `preferred` if it is among the values
+/// tied for the highest frequency, and otherwise breaking ties deterministically
+/// by picking the smallest value.
+#[inline]
+pub fn mode_retain_smallest(numbers: &mut [usize], preferred: usize) -> usize {
+    assert!(
+        !numbers.is_empty(),
+        "No numbers to choose from, `numbers` is empty"
+    );
+    numbers.sort_unstable();
+    let mut best_count = 0usize;
+    let mut best_n = numbers[0];
+    let mut i = 0;
+    let len = numbers.len();
+    while i < len {
+        let val = numbers[i];
+        let mut j = i + 1;
+        while j < len && numbers[j] == val {
+            j += 1;
+        }
+        let count = j - i;
+        if count > best_count || (count == best_count && val == preferred) {
+            best_count = count;
+            best_n = val;
+        }
+        i = j;
+    }
+    best_n
+}
+
+/// Returns the mode (most common value) of a mutable slice of `usize`.
+///
+/// If `preferred` is `Some(p)` and `p` is tied for the highest frequency, `p` is
+/// returned; otherwise ties are broken deterministically by picking the smallest value.
+#[inline]
+pub fn mode_via_sort(numbers: &mut [usize], preferred: Option<usize>) -> usize {
+    match preferred {
+        Some(p) => mode_retain_smallest(numbers, p),
+        None => mode_smallest(numbers),
+    }
 }
 
 pub struct NodeQueue {
@@ -115,30 +154,64 @@ mod tests {
     #[test]
     fn test_mode_via_sort_basic() {
         let mut data = vec![1, 2, 2, 3];
-        let mode = mode_via_sort(&mut data);
+        let mode = mode_via_sort(&mut data, None);
         assert_eq!(mode, 2);
+        assert_eq!(mode_smallest(&mut data), 2);
     }
 
     #[test]
-    fn test_mode_via_sort_tie() {
-        // Both 1 and 2 appear twice, so either is valid
-        let mut data = vec![1, 2, 1, 2, 3];
-        let mode = mode_via_sort(&mut data);
-        assert!(mode == 1 || mode == 2);
+    fn test_mode_via_sort_tie_picks_smallest() {
+        // Both 1 and 2 appear twice; deterministic tie-break picks smallest (1)
+        let mut data = vec![3, 2, 1, 2, 1];
+        assert_eq!(mode_smallest(&mut data), 1);
+        assert_eq!(mode_via_sort(&mut data, None), 1);
+    }
+
+    #[test]
+    fn test_mode_retain_smallest_prefers_preferred_on_tie() {
+        for preferred in [1, 2, 3] {
+            let mut data = vec![3, 1, 2, 1, 2, 3];
+            assert_eq!(mode_retain_smallest(&mut data, preferred), preferred);
+            assert_eq!(mode_via_sort(&mut data, Some(preferred)), preferred);
+        }
+    }
+
+    #[test]
+    fn test_mode_retain_smallest_falls_back_to_smallest_when_preferred_not_in_tie() {
+        let mut data = vec![1, 3, 2, 3, 2];
+        assert_eq!(mode_retain_smallest(&mut data, 1), 2);
+        assert_eq!(mode_via_sort(&mut data, Some(1)), 2);
+        assert_eq!(mode_retain_smallest(&mut data, 99), 2);
     }
 
     #[test]
     fn test_mode_via_sort_single_element() {
         let mut data = vec![42];
-        let mode = mode_via_sort(&mut data);
+        let mode = mode_via_sort(&mut data, None);
         assert_eq!(mode, 42);
+        assert_eq!(mode_smallest(&mut data), 42);
+        assert_eq!(mode_retain_smallest(&mut data, 7), 42);
     }
 
     #[test]
     #[should_panic]
     fn test_mode_via_sort_empty_panics() {
         let mut data: Vec<usize> = vec![];
-        let _ = mode_via_sort(&mut data);
+        let _ = mode_via_sort(&mut data, None);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_mode_smallest_empty_panics() {
+        let mut data: Vec<usize> = vec![];
+        let _ = mode_smallest(&mut data);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_mode_retain_smallest_empty_panics() {
+        let mut data: Vec<usize> = vec![];
+        let _ = mode_retain_smallest(&mut data, 0);
     }
 
     #[test]

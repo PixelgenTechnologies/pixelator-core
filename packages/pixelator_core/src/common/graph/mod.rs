@@ -35,6 +35,7 @@ pub struct Graph<T> {
     total_edge_weight: usize,
     norm: f64,
     degrees: Vec<usize>,
+    bipartite_is_b: Option<Vec<bool>>,
 }
 
 impl<T: EdgeWeight> Graph<T> {
@@ -81,7 +82,26 @@ impl<T: EdgeWeight> Graph<T> {
             total_edge_weight,
             norm,
             degrees,
+            bipartite_is_b: None,
         }
+    }
+
+    /// Attach a bipartite side mask (`false` for A-side / `umi1`, `true` for B-side / `umi2`).
+    pub fn with_bipartite_side_mask(mut self, is_b: Vec<bool>) -> Self {
+        assert_eq!(
+            is_b.len(),
+            self.num_nodes,
+            "Bipartite side mask length ({}) must match number of nodes ({})",
+            is_b.len(),
+            self.num_nodes
+        );
+        self.bipartite_is_b = Some(is_b);
+        self
+    }
+
+    /// Returns the optional bipartite side mask (`false` for A-side, `true` for B-side).
+    pub fn get_bipartite_side_mask(&self) -> Option<&[bool]> {
+        self.bipartite_is_b.as_deref()
     }
 
     pub fn get_adjacency_matrix(&self) -> &CsMat<T> {
@@ -363,7 +383,9 @@ impl From<Graph<u8>> for Graph<usize> {
             data.iter().map(|&v| v as usize).collect(),
         );
 
-        Graph::<usize>::from_adjacency_matrix(adjacency_matrix)
+        let mut converted = Graph::<usize>::from_adjacency_matrix(adjacency_matrix);
+        converted.bipartite_is_b = graph.bipartite_is_b;
+        converted
     }
 }
 

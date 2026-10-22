@@ -269,20 +269,27 @@ where
     let pairs = ParquetUMIPairIter::new(parquet_file).expect("Failed to create ParquetUMIPairIter");
     // Mean degree about 3, so the node count is near 2E/3.
     let num_pairs = pairs.size_hint().0;
-    let mut umi_mapping = UmiToNodeIndexMapping::with_capacity(num_pairs.saturating_mul(2) / 3);
+    let est_nodes = num_pairs.saturating_mul(2) / 3;
+    let mut umi_mapping = UmiToNodeIndexMapping::with_capacity(est_nodes);
+    let mut is_b = Vec::with_capacity(est_nodes);
     let triplets: Vec<(NodeIdx, NodeIdx, T)> = pairs
         .map(|(src, dest)| {
-            let (src, dest) = (
-                umi_mapping.get_or_insert(src),
-                umi_mapping.get_or_insert(dest),
-            );
-            (src.min(dest), src.max(dest), T::one())
+            let u = umi_mapping.get_or_insert(src);
+            if u >= is_b.len() {
+                is_b.resize(u + 1, false);
+            }
+            let v = umi_mapping.get_or_insert(dest);
+            if v >= is_b.len() {
+                is_b.resize(v + 1, true);
+            }
+            (u.min(v), u.max(v), T::one())
         })
         .collect();
 
     let num_nodes = umi_mapping.get_num_of_nodes();
     info!("Creating graph...");
-    let graph = Graph::<T>::from_undirected_triplets(triplets, num_nodes);
+    let graph =
+        Graph::<T>::from_undirected_triplets(triplets, num_nodes).with_bipartite_side_mask(is_b);
     info!(
         "Graph created with {} nodes, {} edge entries, total edge weight {}",
         graph.get_num_nodes(),
