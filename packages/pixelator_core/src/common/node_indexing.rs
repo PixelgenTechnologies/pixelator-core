@@ -1,10 +1,53 @@
-use rustc_hash::FxHashMap as HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
+
+use rustc_hash::FxHasher;
 
 use crate::common::types::{Edge, EdgeWeight, NodeIdx, UMI, UMIPair};
 
+/// Hasher for UMI keys: FxHash followed by the murmur3 `fmix64` finalizer.
+///
+/// FxHash only spreads keys well for tables up to 2^26 buckets; for larger tables part of the
+/// bucket index comes straight from the key's lowest bits, so biased UMIs pile up in part of the
+/// table and probe sequences get very long. The finalizer lets every UMI bit affect every hash bit.
+#[derive(Default)]
+struct UmiHasher(FxHasher);
+
+impl Hasher for UmiHasher {
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        self.0.write(bytes);
+    }
+
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.0.write_u64(i);
+    }
+
+    #[inline]
+    fn write_usize(&mut self, i: usize) {
+        self.0.write_usize(i);
+    }
+
+    #[inline]
+    fn finish(&self) -> u64 {
+        let mut h = self.0.finish();
+        h ^= h >> 33;
+        h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
+        h ^= h >> 33;
+        h = h.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+        h ^ (h >> 33)
+    }
+}
+
+type UmiBuildHasher = BuildHasherDefault<UmiHasher>;
+
+// The std map is only used with `UmiBuildHasher`, never with the default SipHash.
+#[allow(clippy::disallowed_types)]
+type UmiHashMap<V> = std::collections::HashMap<UMI, V, UmiBuildHasher>;
+
 pub struct UmiToNodeIndexMapping {
     node_idx_to_umi: Vec<NodeIdx>,
-    umi_to_node_idx: HashMap<UMI, NodeIdx>,
+    umi_to_node_idx: UmiHashMap<NodeIdx>,
 }
 
 impl UmiToNodeIndexMapping {
@@ -12,7 +55,10 @@ impl UmiToNodeIndexMapping {
     pub fn with_capacity(node_capacity: usize) -> Self {
         Self {
             node_idx_to_umi: Vec::with_capacity(node_capacity),
-            umi_to_node_idx: HashMap::with_capacity_and_hasher(node_capacity, Default::default()),
+            umi_to_node_idx: UmiHashMap::with_capacity_and_hasher(
+                node_capacity,
+                Default::default(),
+            ),
         }
     }
 
@@ -148,6 +194,20 @@ mod tests {
             }),
             umis[2]
         );
+    }
+
+    #[test]
+    fn test_umi_hash_spreads_high_bucket_bits_for_biased_low_bits() {
+        use std::hash::BuildHasher;
+
+        // Every key has the same lowest 4 bits (the same first two nucleotides). For a table
+        // with 2^30 buckets, bucket-index bits 26..30 must still take every value.
+        let hasher = UmiBuildHasher::default();
+        let high_bucket_bits: rustc_hash::FxHashSet<u64> = (0..10_000usize)
+            .map(|i| (hasher.hash_one((i << 4) | 0b0101) >> 26) & 0xF)
+            .collect();
+
+        assert_eq!(high_bucket_bits.len(), 16);
     }
 
     #[test]

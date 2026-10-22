@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Building a graph from a parquet edge list reads the file only once.
 - Leiden is faster and uses less peak memory on large graphs.
 
+### Fixed
+
+- UMI keys are now mixed before hashing to prevent UMI bias increase hash collision likelihood.
+
 ## [0.2.0] - 2026-09-14
 
 ### Added
