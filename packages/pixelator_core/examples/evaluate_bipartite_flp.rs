@@ -8,16 +8,20 @@ use std::time::Instant;
 use itertools::Itertools;
 use mimalloc::MiMalloc;
 use rand::prelude::*;
+use rayon::prelude::*;
 use rustc_hash::FxHashMap as HashMap;
 use smallvec::SmallVec;
 
 use pixelator_core::common::constants::MIN_PNA_COMPONENT_SIZE;
 use pixelator_core::common::graph::Graph;
-use pixelator_core::common::io::create_graph_and_umi_mapping_from_parquet_file;
+use pixelator_core::common::io::{
+    ParquetUMIPairIter, create_graph_and_umi_mapping_from_parquet_file,
+};
+use pixelator_core::common::node_indexing::UmiToNodeIndexMapping;
 use pixelator_core::common::node_partitioning::{
     FastNodePartitioning, LeidenNodePartitioning, NodePartitioning,
 };
-use pixelator_core::common::types::NodeIdx;
+use pixelator_core::common::types::{NodeIdx, PartitionId};
 use pixelator_core::common::utils::{NodeQueue, mode_retain_smallest, mode_smallest};
 use pixelator_core::fast_label_propagation::algorithm::{
     DEFAULT_BIPARTITE_FLP_MAX_ROUNDS, DEFAULT_BIPARTITE_FLP_MIN_CHANGED_FRACTION,
@@ -63,6 +67,49 @@ fn reset_peak_memory() -> usize {
 fn peak_delta_mb(base_live: usize) -> f64 {
     let peak = PEAK_BYTES.load(AtomicOrdering::Relaxed);
     peak.saturating_sub(base_live) as f64 / (1024.0 * 1024.0)
+}
+
+/// Load a Parquet edge list and optionally shuffle the `(umi1, umi2)` edge rows BEFORE
+/// inserting into `UmiToNodeIndexMapping`, simulating realistic unsorted sequencing data
+/// where node indices `0..N` are not sorted by ground-truth cell!
+fn load_graph_from_parquet_with_edge_order(
+    parquet_file: &str,
+    shuffle_edges_seed: Option<u64>,
+) -> (UmiToNodeIndexMapping, Graph<u8>) {
+    if shuffle_edges_seed.is_none() {
+        return create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
+    }
+
+    let pairs_iter =
+        ParquetUMIPairIter::new(parquet_file).expect("Failed to create ParquetUMIPairIter");
+    let mut raw_pairs: Vec<_> = pairs_iter.collect();
+    let mut rng = StdRng::seed_from_u64(shuffle_edges_seed.unwrap());
+    raw_pairs.shuffle(&mut rng);
+
+    let num_pairs = raw_pairs.len();
+    let est_nodes = num_pairs.saturating_mul(2) / 3;
+    let mut umi_mapping = UmiToNodeIndexMapping::with_capacity(est_nodes);
+    let mut is_b = Vec::with_capacity(est_nodes);
+
+    let triplets: Vec<(NodeIdx, NodeIdx, u8)> = raw_pairs
+        .into_iter()
+        .map(|(src, dest)| {
+            let u = umi_mapping.get_or_insert(src);
+            if u >= is_b.len() {
+                is_b.resize(u + 1, false);
+            }
+            let v = umi_mapping.get_or_insert(dest);
+            if v >= is_b.len() {
+                is_b.resize(v + 1, true);
+            }
+            (u.min(v), u.max(v), 1u8)
+        })
+        .collect();
+
+    let num_nodes = umi_mapping.get_num_of_nodes();
+    let graph =
+        Graph::<u8>::from_undirected_triplets(triplets, num_nodes).with_bipartite_side_mask(is_b);
+    (umi_mapping, graph)
 }
 
 /// Legacy random tie-breaking mode (matching `origin/dev` before deterministic tie-breaking).
@@ -111,6 +158,224 @@ fn mode_retain_random(numbers: &mut [usize], preferred: usize, rng: &mut impl Rn
         },
     );
     best_n
+}
+
+/// Mode that requires `best_count >= 2` when node has degree >= 2 (leaves of degree 1 still join
+/// their sole neighbor). Ties among modes with count >= 2 are broken by `mode_retain_smallest`
+/// (or `mode_smallest` when `retain_preferred` is false).
+#[inline]
+fn mode_strict_majority_or_leaf(
+    numbers: &mut [usize],
+    preferred: usize,
+    retain_preferred: bool,
+) -> usize {
+    if numbers.len() == 1 {
+        return numbers[0];
+    }
+    numbers.sort_unstable();
+    let mut best_count = 0usize;
+    let mut best_n = numbers[0];
+    let mut i = 0;
+    let len = numbers.len();
+    while i < len {
+        let val = numbers[i];
+        let mut j = i + 1;
+        while j < len && numbers[j] == val {
+            j += 1;
+        }
+        let count = j - i;
+        if count > best_count || (retain_preferred && count == best_count && val == preferred) {
+            best_count = count;
+            best_n = val;
+        }
+        i = j;
+    }
+    if best_count >= 2 { best_n } else { preferred }
+}
+
+#[derive(Clone, Copy)]
+enum BipartiteModification {
+    /// 2a. Round 0 (A -> B): B picks highest-degree A-neighbor `max_by_key((deg[a], usize::MAX - a))`
+    ///     Round 0 (B -> A): `mode_smallest`, Round 1+: `mode_retain_smallest`
+    HubAttractorR0,
+    /// 2b. Hub Attractor in Round 0 (A -> B) + Strict Majority (`count >= 2` for deg >= 2) on A in Round 0 (B -> A),
+    ///     followed by standard `mode_retain_smallest` in Round 1+
+    HubAttractorR0StrictMajR0,
+    /// 2c. Standard `indices[start]` in Round 0 (A -> B) + Strict Majority (`count >= 2` for deg >= 2) on A in Round 0 (B -> A),
+    ///     followed by standard `mode_retain_smallest` in Round 1+
+    SmallestR0StrictMajR0,
+    /// 2d. Hub Attractor in Round 0 (A -> B) + Strict Majority (`count >= 2` for deg >= 2) on A in ALL rounds
+    HubAttractorR0StrictMajAllRounds,
+    /// 2e. Mutual 2-hop / 4-cycle support in Round 0 (A -> B) + mode_smallest in R0
+    FourCycleSupportedR0,
+    /// 2f. Mutual 2-hop / 4-cycle support in Round 0 (A -> B) + Strict Majority on A in Round 0 (B -> A),
+    ///     followed by standard `mode_retain_smallest` in Round 1+
+    FourCycleSupportedR0StrictMajR0,
+}
+
+fn run_bipartite_modification(
+    graph: &Graph<u8>,
+    is_b: &[bool],
+    modification: BipartiteModification,
+    min_changed_fraction: f64,
+    max_rounds: usize,
+) -> (FastNodePartitioning, f64, f64) {
+    let n = graph.get_num_nodes();
+    let base_mem = reset_peak_memory();
+    let t0 = Instant::now();
+
+    let threshold_nodes = (n as f64 * min_changed_fraction.clamp(0.0, 1.0)) as usize;
+    let mut labels: Vec<PartitionId> = (0..n).collect();
+
+    let adj = graph.get_adjacency_matrix();
+    let indptr_raw = adj.indptr();
+    let indptr = indptr_raw.as_slice().unwrap();
+    let indices = adj.indices();
+    let degrees = graph.get_degrees();
+
+    {
+        let atomic_labels: &[AtomicUsize] =
+            unsafe { std::slice::from_raw_parts(labels.as_mut_ptr() as *const AtomicUsize, n) };
+
+        for round in 0..max_rounds {
+            // Half-step 1 (A -> B)
+            let b_changed: usize = atomic_labels
+                .par_iter()
+                .enumerate()
+                .with_min_len(4096)
+                .map(|(b, label_b)| {
+                    if !is_b[b] {
+                        return 0usize;
+                    }
+                    let start = indptr[b];
+                    let end = indptr[b + 1];
+                    if start == end {
+                        return 0usize;
+                    }
+                    let cur = label_b.load(AtomicOrdering::Relaxed);
+                    let chosen = match (modification, round) {
+                        (BipartiteModification::SmallestR0StrictMajR0, 0) => indices[start],
+                        (
+                            BipartiteModification::HubAttractorR0
+                            | BipartiteModification::HubAttractorR0StrictMajR0
+                            | BipartiteModification::HubAttractorR0StrictMajAllRounds,
+                            0,
+                        ) => indices[start..end]
+                            .iter()
+                            .copied()
+                            .max_by_key(|&a| (degrees[a], usize::MAX - a))
+                            .unwrap(),
+                        (
+                            BipartiteModification::FourCycleSupportedR0
+                            | BipartiteModification::FourCycleSupportedR0StrictMajR0,
+                            0,
+                        ) => {
+                            let b_neighbors = &indices[start..end];
+                            if b_neighbors.len() == 1 {
+                                b_neighbors[0]
+                            } else {
+                                // Fast two-pointer intersection count over sorted CSR slices
+                                b_neighbors
+                                    .iter()
+                                    .copied()
+                                    .max_by_key(|&a| {
+                                        let mut four_cycles = 0usize;
+                                        for &b_prime in &indices[indptr[a]..indptr[a + 1]] {
+                                            if b_prime == b {
+                                                continue;
+                                            }
+                                            let bp_neighbors =
+                                                &indices[indptr[b_prime]..indptr[b_prime + 1]];
+                                            for &a2 in b_neighbors {
+                                                if a2 != a
+                                                    && bp_neighbors.binary_search(&a2).is_ok()
+                                                {
+                                                    four_cycles += 1;
+                                                }
+                                            }
+                                        }
+                                        (four_cycles, degrees[a], usize::MAX - a)
+                                    })
+                                    .unwrap()
+                            }
+                        }
+                        _ => {
+                            let mut parts = SmallVec::<[usize; 8]>::new();
+                            for &a in &indices[start..end] {
+                                parts.push(atomic_labels[a].load(AtomicOrdering::Relaxed));
+                            }
+                            mode_retain_smallest(parts.as_mut_slice(), cur)
+                        }
+                    };
+
+                    if chosen != cur {
+                        label_b.store(chosen, AtomicOrdering::Relaxed);
+                        1usize
+                    } else {
+                        0usize
+                    }
+                })
+                .sum();
+
+            // Half-step 2 (B -> A)
+            let a_changed: usize = atomic_labels
+                .par_iter()
+                .enumerate()
+                .with_min_len(4096)
+                .map(|(a, label_a)| {
+                    if is_b[a] {
+                        return 0usize;
+                    }
+                    let start = indptr[a];
+                    let end = indptr[a + 1];
+                    if start == end {
+                        return 0usize;
+                    }
+                    let mut parts = SmallVec::<[usize; 8]>::new();
+                    for &b in &indices[start..end] {
+                        parts.push(atomic_labels[b].load(AtomicOrdering::Relaxed));
+                    }
+                    let cur = label_a.load(AtomicOrdering::Relaxed);
+                    let chosen = match (modification, round) {
+                        (
+                            BipartiteModification::HubAttractorR0
+                            | BipartiteModification::FourCycleSupportedR0,
+                            0,
+                        ) => mode_smallest(parts.as_mut_slice()),
+                        (
+                            BipartiteModification::HubAttractorR0StrictMajR0
+                            | BipartiteModification::SmallestR0StrictMajR0
+                            | BipartiteModification::FourCycleSupportedR0StrictMajR0,
+                            0,
+                        ) => mode_strict_majority_or_leaf(parts.as_mut_slice(), cur, false),
+                        (BipartiteModification::HubAttractorR0StrictMajAllRounds, r) => {
+                            mode_strict_majority_or_leaf(parts.as_mut_slice(), cur, r > 0)
+                        }
+                        _ => mode_retain_smallest(parts.as_mut_slice(), cur),
+                    };
+
+                    if chosen != cur {
+                        label_a.store(chosen, AtomicOrdering::Relaxed);
+                        1usize
+                    } else {
+                        0usize
+                    }
+                })
+                .sum();
+
+            if b_changed + a_changed <= threshold_nodes {
+                break;
+            }
+        }
+    }
+
+    let cleaned = clean_partitions(
+        graph,
+        FastNodePartitioning::initialize_from_partitions(labels),
+    );
+    let sec = t0.elapsed().as_secs_f64();
+    let mem = peak_delta_mb(base_mem);
+    (cleaned, sec, mem)
 }
 
 #[derive(Clone, Copy)]
@@ -258,21 +523,16 @@ fn compute_ari_and_nmi(a: &[usize], b: &[usize]) -> (f64, f64) {
 }
 
 struct GroundTruthData {
-    /// For each node index `u` in `graph_1pc`, its ground-truth cell component ID in `graph_0pc`.
     gt_cell_of_1pc_node: Vec<usize>,
-    /// Undirected true crossing edges `(u, v)` (`u < v`) in `graph_1pc` where `gt_cell[u] != gt_cell[v]`.
     true_crossing_edges: Vec<(NodeIdx, NodeIdx)>,
-    /// Undirected true intra-cell edges `(u, v)` (`u < v`) in `graph_1pc` where `gt_cell[u] == gt_cell[v]`.
     true_intra_edges: Vec<(NodeIdx, NodeIdx)>,
-    /// Number of ground-truth cells (>= 8,000 nodes) in `0pc`.
     gt_cells_ge_8k: usize,
-    /// Total connected components in `0pc`.
     gt_total_components: usize,
 }
 
 fn build_ground_truth(
     path_0pc: &str,
-    mapping_1pc: &pixelator_core::common::node_indexing::UmiToNodeIndexMapping,
+    mapping_1pc: &UmiToNodeIndexMapping,
     graph_1pc: &Graph<u8>,
 ) -> GroundTruthData {
     let (mapping_0pc, graph_0pc) = create_graph_and_umi_mapping_from_parquet_file::<u8>(path_0pc);
@@ -340,7 +600,6 @@ fn evaluate_variant(
     let flp_map = flp_partition.get_node_to_partition_map();
     let flp_num_partitions = flp_partition.num_partitions();
 
-    // Criterion 2: How many true crossing edges are folded inside FLP partitions?
     let folded_crossing_edges = gt
         .true_crossing_edges
         .iter()
@@ -357,7 +616,6 @@ fn evaluate_variant(
     let flp_coarsened_intra_pct =
         100.0 * flp_coarsened_intra as f64 / gt.true_intra_edges.len() as f64;
 
-    // Run Leiden stage
     let base_leiden_mem = reset_peak_memory();
     let t_leiden = Instant::now();
     let quality_function = Modularity::new(1.0, graph_1pc.get_total_edge_weight());
@@ -373,8 +631,6 @@ fn evaluate_variant(
     let leiden_mem_mb = peak_delta_mb(base_leiden_mem);
 
     let final_partition_map = wp_graph.get_ancestor_to_partition_map();
-
-    // Criterion 3: Connected components formed after removing crossing edges
     let final_components =
         graph_1pc.connected_components_by(|u, v| final_partition_map[u] == final_partition_map[v]);
 
@@ -392,7 +648,6 @@ fn evaluate_variant(
         .filter(|&&sz| sz < MIN_PNA_COMPONENT_SIZE)
         .sum();
 
-    // True crossing edges remaining vs removed after filtering
     let leaked_crossing_edges = gt
         .true_crossing_edges
         .iter()
@@ -401,7 +656,6 @@ fn evaluate_variant(
     let removed_crossing_edges = total_true_crossing - leaked_crossing_edges;
     let removed_crossing_pct = 100.0 * removed_crossing_edges as f64 / total_true_crossing as f64;
 
-    // True intra-cell edges preserved vs cut after filtering
     let preserved_intra_edges = gt
         .true_intra_edges
         .iter()
@@ -461,7 +715,7 @@ fn evaluate_variant(
     final_components
 }
 
-fn run_dataset_evaluation(dataset_prefix: &str) {
+fn run_dataset_evaluation(dataset_prefix: &str, shuffle_edges_seed: Option<u64>) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let path_0pc = manifest_dir
         .join("test_data")
@@ -471,12 +725,15 @@ fn run_dataset_evaluation(dataset_prefix: &str) {
         .join(format!("{}_1pc.parquet", dataset_prefix));
 
     println!("\n================================================================================");
-    println!("EVALUATING DATASET PAIR: {} (0pc vs 1pc)", dataset_prefix);
+    println!(
+        "EVALUATING DATASET PAIR: {} (0pc vs 1pc) | shuffle_edges_seed={:?}",
+        dataset_prefix, shuffle_edges_seed
+    );
     println!("================================================================================");
 
     let base_load_mem = reset_peak_memory();
     let (mapping_1pc, graph_1pc) =
-        create_graph_and_umi_mapping_from_parquet_file::<u8>(path_1pc.to_str().unwrap());
+        load_graph_from_parquet_with_edge_order(path_1pc.to_str().unwrap(), shuffle_edges_seed);
     let graph_load_live_mb = LIVE_BYTES
         .load(AtomicOrdering::Relaxed)
         .saturating_sub(base_load_mem) as f64
@@ -558,7 +815,7 @@ fn run_dataset_evaluation(dataset_prefix: &str) {
         Some(&base_components),
     );
 
-    // 2. Convergent Alternating Bipartite FLP (<1% changed, 4T)
+    // 2. Convergent Alternating Bipartite FLP (<1% changed, 4T, Smallest ID)
     let is_b = graph_1pc
         .get_bipartite_side_mask()
         .expect("Graph loaded from parquet must have bipartite side mask");
@@ -577,40 +834,60 @@ fn run_dataset_evaluation(dataset_prefix: &str) {
     let bip_peak_mem_mb = peak_delta_mb(base_bip_mem);
 
     let _ = evaluate_variant(
-        "2. Alternating Bipartite FLP (<1% changed, parallel)",
+        "2. Alternating Bipartite FLP (<1% changed, Smallest ID)",
         &graph_1pc,
         &gt,
         p_bip,
         bip_total_flp_sec,
-        0.0, // included in alternating_bipartite_flp
+        0.0,
         bip_loop_only_mb,
         bip_peak_mem_mb,
         Some(&base_components),
     );
 
-    // Also evaluate 1-pass (max_rounds = 1) and <10% (min_changed_fraction = 0.10) for comparison
-    for (label, frac, max_r) in [
+    // Test Bipartite modifications on the randomized-edge graph (NO hashing!)
+    for (label, modif) in [
         (
-            "2-alt1. Alternating Bipartite FLP (1-pass, max_rounds=1)",
-            1.0,
-            1,
+            "2a. Bipartite FLP: Hub-Attractor R0 (max deg_A, tie min ID)",
+            BipartiteModification::HubAttractorR0,
         ),
-        ("2-alt2. Alternating Bipartite FLP (<10% changed)", 0.10, 10),
+        (
+            "2b. Bipartite FLP: Hub-Attractor R0 + StrictMaj A in R0",
+            BipartiteModification::HubAttractorR0StrictMajR0,
+        ),
+        (
+            "2c. Bipartite FLP: Smallest R0 + StrictMaj A in R0",
+            BipartiteModification::SmallestR0StrictMajR0,
+        ),
+        (
+            "2d. Bipartite FLP: Hub-Attractor R0 + StrictMaj A (All Rounds)",
+            BipartiteModification::HubAttractorR0StrictMajAllRounds,
+        ),
+        (
+            "2e. Bipartite FLP: 4-Cycle Supported R0 + Hub + Smallest ID",
+            BipartiteModification::FourCycleSupportedR0,
+        ),
+        (
+            "2f. Bipartite FLP: 4-Cycle Supported R0 + StrictMaj A in R0",
+            BipartiteModification::FourCycleSupportedR0StrictMajR0,
+        ),
     ] {
-        let base_m = reset_peak_memory();
-        let t0 = Instant::now();
-        let p_alt: FastNodePartitioning = alternating_bipartite_flp(&graph_1pc, is_b, frac, max_r);
-        let alt_sec = t0.elapsed().as_secs_f64();
-        let alt_mem = peak_delta_mb(base_m);
+        let (p_mod, sec_mod, mem_mod) = run_bipartite_modification(
+            &graph_1pc,
+            is_b,
+            modif,
+            DEFAULT_BIPARTITE_FLP_MIN_CHANGED_FRACTION,
+            DEFAULT_BIPARTITE_FLP_MAX_ROUNDS,
+        );
         let _ = evaluate_variant(
             label,
             &graph_1pc,
             &gt,
-            p_alt,
-            alt_sec,
+            p_mod,
+            sec_mod,
             0.0,
             bip_loop_only_mb,
-            alt_mem,
+            mem_mod,
             Some(&base_components),
         );
     }
@@ -619,10 +896,17 @@ fn run_dataset_evaluation(dataset_prefix: &str) {
 fn main() {
     let args: Vec<String> = env::args().collect();
     let mut target = "all".to_string();
+    let mut shuffle_seed: Option<u64> = Some(42); // Default: randomize edge order before building graph!
     let mut i = 1;
     while i < args.len() {
         if args[i] == "--dataset" && i + 1 < args.len() {
             target = args[i + 1].clone();
+            i += 2;
+        } else if args[i] == "--no-shuffle" {
+            shuffle_seed = None;
+            i += 1;
+        } else if args[i] == "--shuffle-seed" && i + 1 < args.len() {
+            shuffle_seed = Some(args[i + 1].parse().expect("Invalid seed"));
             i += 2;
         } else {
             target = args[i].clone();
@@ -632,14 +916,14 @@ fn main() {
 
     match target.as_str() {
         "40" | "40cells" | "mix_40cells" => {
-            run_dataset_evaluation("mix_40cells");
+            run_dataset_evaluation("mix_40cells", shuffle_seed);
         }
         "200" | "200cells" | "mix_200cells" => {
-            run_dataset_evaluation("mix_200cells");
+            run_dataset_evaluation("mix_200cells", shuffle_seed);
         }
         "all" => {
-            run_dataset_evaluation("mix_40cells");
-            run_dataset_evaluation("mix_200cells");
+            run_dataset_evaluation("mix_40cells", shuffle_seed);
+            run_dataset_evaluation("mix_200cells", shuffle_seed);
         }
         other => {
             eprintln!(
