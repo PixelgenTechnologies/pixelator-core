@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Replace asynchronous queue-based Fast Label Propagation on bipartite Parquet graphs with parallel, deterministic Convergent Alternating Bipartite FLP (`< 1%` nodes changed threshold) and deterministic smallest-ID tie-breaking (`mode_smallest` / `mode_retain_smallest`).
 - Benchmark history is now only published from `main` and `dev` pushes.
 - Fast label propagation, connected-component export, and graph statistics are faster and use less memory on large graphs. On the 40-cell mix, label propagation went from 2.17 s to 1.60 s and its peak heap from 134 MB to 56 MB. Leiden is unchanged.
 - Building a graph from a parquet edge list reads the file only once.

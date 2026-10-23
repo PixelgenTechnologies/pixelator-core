@@ -47,8 +47,9 @@ impl AssignmentStrategy<FastNodePartitioning> for DefaultAssignmentStrategy {
         // Finding the most common partition among neighbors by sorting and picking the mode
         // from the vector is more efficient than using a hash map to count occurrences
         // for thse small vectors we expect here.
-        let most_common_neighbors_partition = mode_via_sort(partitions.as_mut_slice());
         let node_i_current_partition = node_partition.get_partition_for_node(&current_node);
+        let most_common_neighbors_partition =
+            mode_via_sort(partitions.as_mut_slice(), Some(node_i_current_partition));
 
         if most_common_neighbors_partition != node_i_current_partition {
             node_partition.update_partition(current_node, most_common_neighbors_partition);

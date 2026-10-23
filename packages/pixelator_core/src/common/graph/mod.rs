@@ -1,3 +1,4 @@
+use rayon::prelude::*;
 use rustc_hash::FxHashSet as HashSet;
 use sprs::CsMat;
 use std::collections::VecDeque;
@@ -35,6 +36,7 @@ pub struct Graph<T> {
     total_edge_weight: usize,
     norm: f64,
     degrees: Vec<usize>,
+    bipartite_is_b: Option<Vec<bool>>,
 }
 
 impl<T: EdgeWeight> Graph<T> {
@@ -81,7 +83,26 @@ impl<T: EdgeWeight> Graph<T> {
             total_edge_weight,
             norm,
             degrees,
+            bipartite_is_b: None,
         }
+    }
+
+    /// Attach a bipartite side mask (`false` for A-side / `umi1`, `true` for B-side / `umi2`).
+    pub fn with_bipartite_side_mask(mut self, is_b: Vec<bool>) -> Self {
+        assert_eq!(
+            is_b.len(),
+            self.num_nodes,
+            "Bipartite side mask length ({}) must match number of nodes ({})",
+            is_b.len(),
+            self.num_nodes
+        );
+        self.bipartite_is_b = Some(is_b);
+        self
+    }
+
+    /// Returns the optional bipartite side mask (`false` for A-side, `true` for B-side).
+    pub fn get_bipartite_side_mask(&self) -> Option<&[bool]> {
+        self.bipartite_is_b.as_deref()
     }
 
     pub fn get_adjacency_matrix(&self) -> &CsMat<T> {
@@ -237,24 +258,35 @@ impl<T: EdgeWeight> Graph<T> {
         F: Fn(NodeIdx, NodeIdx) -> bool,
     {
         let n = self.get_num_nodes();
-        let mut labels = vec![0usize; n];
-        let mut visited = vec![false; n];
+        let adj = self.get_adjacency_matrix();
+        let indptr_base = adj.indptr();
+        let indptr = indptr_base
+            .as_slice()
+            .expect("CSR indptr should expose a contiguous slice");
+        let indices = adj.indices();
+
+        const UNVISITED: usize = usize::MAX;
+        let mut labels = vec![UNVISITED; n];
         let mut queue = VecDeque::new();
         let mut component_id = 0usize;
 
         for start in 0..n {
-            if visited[start] {
+            if labels[start] != UNVISITED {
                 continue;
             }
             let id = component_id;
             component_id += 1;
-            visited[start] = true;
-            queue.push_back(start);
+            labels[start] = id;
+            for &neighbor in &indices[indptr[start]..indptr[start + 1]] {
+                if labels[neighbor] == UNVISITED && filter(start, neighbor) {
+                    labels[neighbor] = id;
+                    queue.push_back(neighbor);
+                }
+            }
             while let Some(node) = queue.pop_front() {
-                labels[node] = id;
-                for neighbor in self.neighbors_iter(node) {
-                    if !visited[neighbor] && filter(node, neighbor) {
-                        visited[neighbor] = true;
+                for &neighbor in &indices[indptr[node]..indptr[node + 1]] {
+                    if labels[neighbor] == UNVISITED && filter(node, neighbor) {
+                        labels[neighbor] = id;
                         queue.push_back(neighbor);
                     }
                 }
@@ -296,7 +328,11 @@ fn csr_from_undirected_triplets<T>(
 where
     T: EdgeWeight,
 {
-    triplets.sort_unstable_by_key(|&(u, v, _)| (u, v));
+    if triplets.len() >= 16_384 {
+        triplets.par_sort_unstable_by_key(|&(u, v, _)| (u, v));
+    } else {
+        triplets.sort_unstable_by_key(|&(u, v, _)| (u, v));
+    }
 
     // Merge duplicate undirected pairs in place (adjacent after sort) by summing
     // weights. This avoids a second undirected buffer at peak construction memory.
@@ -352,18 +388,54 @@ where
 
 impl From<Graph<u8>> for Graph<usize> {
     fn from(graph: Graph<u8>) -> Graph<usize> {
-        let shape = graph.adjacency_matrix.shape();
-        let indptr = graph.adjacency_matrix.indptr();
-        let indices = graph.adjacency_matrix.indices();
-        let data = graph.adjacency_matrix.data();
-        let adjacency_matrix = CsMat::new(
-            shape,
-            indptr.as_slice().unwrap().into(),
-            indices.into(),
-            data.iter().map(|&v| v as usize).collect(),
-        );
+        let Graph {
+            adjacency_matrix,
+            num_nodes,
+            edge_entry_count,
+            total_edge_weight,
+            norm,
+            degrees,
+            bipartite_is_b,
+        } = graph;
+        let shape = adjacency_matrix.shape();
+        let (indptr, indices, data) = adjacency_matrix.into_raw_storage();
+        let data_usize: Vec<usize> = data.into_iter().map(|v| v as usize).collect();
+        let adjacency_matrix = CsMat::new(shape, indptr, indices, data_usize);
 
-        Graph::<usize>::from_adjacency_matrix(adjacency_matrix)
+        Graph {
+            adjacency_matrix,
+            num_nodes,
+            edge_entry_count,
+            total_edge_weight,
+            norm,
+            degrees,
+            bipartite_is_b,
+        }
+    }
+}
+
+impl From<&Graph<u8>> for Graph<usize> {
+    fn from(graph: &Graph<u8>) -> Graph<usize> {
+        let shape = graph.adjacency_matrix.shape();
+        let indptr = graph.adjacency_matrix.indptr().as_slice().unwrap().to_vec();
+        let indices = graph.adjacency_matrix.indices().to_vec();
+        let data: Vec<usize> = graph
+            .adjacency_matrix
+            .data()
+            .iter()
+            .map(|&v| v as usize)
+            .collect();
+        let adjacency_matrix = CsMat::new(shape, indptr, indices, data);
+
+        Graph {
+            adjacency_matrix,
+            num_nodes: graph.num_nodes,
+            edge_entry_count: graph.edge_entry_count,
+            total_edge_weight: graph.total_edge_weight,
+            norm: graph.norm,
+            degrees: graph.degrees.clone(),
+            bipartite_is_b: graph.bipartite_is_b.clone(),
+        }
     }
 }
 
