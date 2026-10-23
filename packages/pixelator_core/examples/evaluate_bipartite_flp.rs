@@ -213,6 +213,344 @@ enum BipartiteModification {
     FourCycleSupportedR0StrictMajR0,
 }
 
+/// Lock-free parallel Disjoint-Set (Union-Find) over `AtomicUsize` parent pointers (`parent[x] <= x`).
+#[inline]
+fn atomic_find(parents: &[AtomicUsize], mut x: usize) -> usize {
+    loop {
+        let p = parents[x].load(AtomicOrdering::Relaxed);
+        if p == x {
+            return x;
+        }
+        let gp = parents[p].load(AtomicOrdering::Relaxed);
+        if gp != p {
+            let _ = parents[x].compare_exchange_weak(
+                p,
+                gp,
+                AtomicOrdering::Relaxed,
+                AtomicOrdering::Relaxed,
+            );
+        }
+        x = gp;
+    }
+}
+
+#[inline]
+fn atomic_union(parents: &[AtomicUsize], mut u: usize, mut v: usize) {
+    loop {
+        u = atomic_find(parents, u);
+        v = atomic_find(parents, v);
+        if u == v {
+            return;
+        }
+        let (high, low) = if u > v { (u, v) } else { (v, u) };
+        if parents[high]
+            .compare_exchange_weak(high, low, AtomicOrdering::Relaxed, AtomicOrdering::Relaxed)
+            .is_ok()
+        {
+            return;
+        }
+    }
+}
+
+/// Approach 3: Find all 4-cycles `(a1 - b1 - a2 - b2 - a1)` in the bipartite graph and merge
+/// all nodes participating in each 4-cycle (plus optionally contract degree-1 leaf nodes into
+/// their sole neighbor).
+///
+/// How 4-cycle detection works on CSR:
+/// For each A-node `a1`, we inspect its B-neighbors `b in N(a1)`, and for each `b` we look at
+/// `a2 in N(b)` with `a2 > a1` (so each pair `(a1, a2)` is only visited in one direction).
+/// If a pair `(a1, a2)` appears via two or more distinct B-neighbors `b1, b2`, then
+/// `(a1, b1, a2, b2)` is a 4-cycle! We union `(a1, a2, b1, b2)` in a lock-free Union-Find.
+#[derive(Clone, Copy)]
+enum FourCycleMode {
+    /// 3a. Merge all 4-cycles (Union-Find) + 3 rounds of Bipartite FLP on non-4-cycle tree tendrils
+    UnionFind4CyclesPlusTreeFlp,
+    /// 3b. Merge all 4-cycles (Union-Find) + Strict-Majority Bipartite FLP on non-4-cycle tendrils
+    ///     (degree-1 leaves join their neighbor; degree >= 2 tendrils only join if >= 2 neighbors agree!)
+    UnionFind4CyclesPlusStrictTreeFlp,
+    /// 3c. Local 4-Cycle Seeded Bipartite FLP (No transitive Union-Find chaining!):
+    ///     Instead of transitive Union-Find across overlapping 4-cycles (which can chain across two cells
+    ///     if two crossing edges happen to land between them), in Round 0 each node `u` ONLY merges with
+    ///     its best 4-cycle partner (local star of 4-cycles), followed by standard Bipartite FLP!
+    Local4CycleSeededBipartiteFlp,
+}
+
+fn run_four_cycle_merge(
+    graph: &Graph<u8>,
+    is_b: &[bool],
+    mode: FourCycleMode,
+) -> (FastNodePartitioning, f64, f64, f64) {
+    let n = graph.get_num_nodes();
+    let base_mem = reset_peak_memory();
+    let t0 = Instant::now();
+
+    let mut labels: Vec<PartitionId> = (0..n).collect();
+    let adj = graph.get_adjacency_matrix();
+    let indptr_raw = adj.indptr();
+    let indptr = indptr_raw.as_slice().unwrap();
+    let indices = adj.indices();
+    let degrees = graph.get_degrees();
+
+    if matches!(mode, FourCycleMode::Local4CycleSeededBipartiteFlp) {
+        // Local 4-Cycle Seeded Bipartite FLP:
+        // Step 1: Find every edge `(u, v)` that participates in at least one 4-cycle!
+        // Specifically, for each B-node `b`, if an A-neighbor `a` shares at least one 4-cycle with `b`,
+        // we mark `(b, a)` as a 4-cycle edge.
+        // In Round 0 (A -> B), `b` ONLY considers A-neighbors connected to `b` by a 4-cycle edge
+        // (unless `b` has degree 1, in which case it joins its sole A-neighbor; if `b` has degree >= 2
+        // and ZERO 4-cycle edges, `b` stays a singleton in Round 0!).
+        let atomic_labels: &[AtomicUsize] =
+            unsafe { std::slice::from_raw_parts(labels.as_mut_ptr() as *const AtomicUsize, n) };
+
+        for round in 0..DEFAULT_BIPARTITE_FLP_MAX_ROUNDS {
+            let b_chg: usize = (0..n)
+                .into_par_iter()
+                .with_min_len(4096)
+                .map(|b| {
+                    if !is_b[b] {
+                        return 0usize;
+                    }
+                    let start = indptr[b];
+                    let end = indptr[b + 1];
+                    if start == end {
+                        return 0usize;
+                    }
+                    let cur = atomic_labels[b].load(AtomicOrdering::Relaxed);
+                    let chosen = if round == 0 {
+                        let b_neighbors = &indices[start..end];
+                        if b_neighbors.len() == 1 {
+                            b_neighbors[0]
+                        } else {
+                            // Find A-neighbor with most 4-cycles with `b`
+                            let mut best_a = cur;
+                            let mut best_key = (0usize, 0usize, 0usize);
+                            for &a in b_neighbors {
+                                let mut fc = 0usize;
+                                for &bp in &indices[indptr[a]..indptr[a + 1]] {
+                                    if bp == b {
+                                        continue;
+                                    }
+                                    let bp_nb = &indices[indptr[bp]..indptr[bp + 1]];
+                                    for &a2 in b_neighbors {
+                                        if a2 != a && bp_nb.binary_search(&a2).is_ok() {
+                                            fc += 1;
+                                        }
+                                    }
+                                }
+                                if fc > 0 {
+                                    let key = (fc, degrees[a], usize::MAX - a);
+                                    if key > best_key {
+                                        best_key = key;
+                                        best_a = a;
+                                    }
+                                }
+                            }
+                            best_a
+                        }
+                    } else {
+                        let mut parts = SmallVec::<[usize; 8]>::new();
+                        for &a in &indices[start..end] {
+                            parts.push(atomic_labels[a].load(AtomicOrdering::Relaxed));
+                        }
+                        mode_strict_majority_or_leaf(parts.as_mut_slice(), cur, true)
+                    };
+                    if chosen != cur {
+                        atomic_labels[b].store(chosen, AtomicOrdering::Relaxed);
+                        1usize
+                    } else {
+                        0usize
+                    }
+                })
+                .sum();
+
+            let a_chg: usize = (0..n)
+                .into_par_iter()
+                .with_min_len(4096)
+                .map(|a| {
+                    if is_b[a] {
+                        return 0usize;
+                    }
+                    let start = indptr[a];
+                    let end = indptr[a + 1];
+                    if start == end {
+                        return 0usize;
+                    }
+                    let mut parts = SmallVec::<[usize; 8]>::new();
+                    for &b in &indices[start..end] {
+                        parts.push(atomic_labels[b].load(AtomicOrdering::Relaxed));
+                    }
+                    let cur = atomic_labels[a].load(AtomicOrdering::Relaxed);
+                    let chosen = mode_strict_majority_or_leaf(parts.as_mut_slice(), cur, round > 0);
+                    if chosen != cur {
+                        atomic_labels[a].store(chosen, AtomicOrdering::Relaxed);
+                        1usize
+                    } else {
+                        0usize
+                    }
+                })
+                .sum();
+
+            if (b_chg + a_chg) * 100 <= n {
+                break;
+            }
+        }
+
+        let loop_mem = peak_delta_mb(base_mem);
+        let cleaned = clean_partitions(
+            graph,
+            FastNodePartitioning::initialize_from_partitions(labels),
+        );
+        let total_sec = t0.elapsed().as_secs_f64();
+        let total_mem = peak_delta_mb(base_mem);
+        return (cleaned, total_sec, loop_mem, total_mem);
+    }
+
+    {
+        let parents: &[AtomicUsize] =
+            unsafe { std::slice::from_raw_parts(labels.as_mut_ptr() as *const AtomicUsize, n) };
+
+        (0..n).into_par_iter().with_min_len(1024).for_each(|u| {
+            let deg_u = degrees[u];
+            if deg_u < 2 {
+                return;
+            }
+            let rank_u = (deg_u, u);
+            let start_u = indptr[u];
+            let end_u = indptr[u + 1];
+
+            let mut wedges = SmallVec::<[(usize, usize); 64]>::new();
+            for &v in &indices[start_u..end_u] {
+                if (degrees[v], v) >= rank_u {
+                    continue;
+                }
+                for &w in &indices[indptr[v]..indptr[v + 1]] {
+                    if (degrees[w], w) < rank_u {
+                        wedges.push((w, v));
+                    }
+                }
+            }
+
+            if wedges.len() < 2 {
+                return;
+            }
+
+            wedges.sort_unstable_by_key(|&(w, _)| w);
+            let mut i = 0;
+            while i < wedges.len() {
+                let w = wedges[i].0;
+                let mut j = i + 1;
+                while j < wedges.len() && wedges[j].0 == w {
+                    j += 1;
+                }
+                if j - i >= 2 {
+                    atomic_union(parents, u, w);
+                    for k in i..j {
+                        atomic_union(parents, u, wedges[k].1);
+                    }
+                }
+                i = j;
+            }
+        });
+
+        (0..n).into_par_iter().with_min_len(4096).for_each(|u| {
+            let r = atomic_find(parents, u);
+            parents[u].store(r, AtomicOrdering::Relaxed);
+        });
+
+        let mut in_four_cycle = vec![false; n];
+        for u in 0..n {
+            let r = parents[u].load(AtomicOrdering::Relaxed);
+            if r != u {
+                in_four_cycle[u] = true;
+                in_four_cycle[r] = true;
+            }
+        }
+
+        let strict_tree = matches!(mode, FourCycleMode::UnionFind4CyclesPlusStrictTreeFlp);
+
+        for round in 0..4 {
+            let b_chg: usize = (0..n)
+                .into_par_iter()
+                .with_min_len(4096)
+                .map(|b| {
+                    if !is_b[b] || in_four_cycle[b] {
+                        return 0usize;
+                    }
+                    let start = indptr[b];
+                    let end = indptr[b + 1];
+                    if start == end {
+                        return 0usize;
+                    }
+                    let cur = parents[b].load(AtomicOrdering::Relaxed);
+                    let mut parts = SmallVec::<[usize; 8]>::new();
+                    for &a in &indices[start..end] {
+                        parts.push(parents[a].load(AtomicOrdering::Relaxed));
+                    }
+                    let chosen = if strict_tree {
+                        mode_strict_majority_or_leaf(parts.as_mut_slice(), cur, round > 0)
+                    } else if round == 0 {
+                        mode_smallest(parts.as_mut_slice())
+                    } else {
+                        mode_retain_smallest(parts.as_mut_slice(), cur)
+                    };
+                    if chosen != cur {
+                        parents[b].store(chosen, AtomicOrdering::Relaxed);
+                        1usize
+                    } else {
+                        0usize
+                    }
+                })
+                .sum();
+
+            let a_chg: usize = (0..n)
+                .into_par_iter()
+                .with_min_len(4096)
+                .map(|a| {
+                    if is_b[a] || in_four_cycle[a] {
+                        return 0usize;
+                    }
+                    let start = indptr[a];
+                    let end = indptr[a + 1];
+                    if start == end {
+                        return 0usize;
+                    }
+                    let cur = parents[a].load(AtomicOrdering::Relaxed);
+                    let mut parts = SmallVec::<[usize; 8]>::new();
+                    for &b in &indices[start..end] {
+                        parts.push(parents[b].load(AtomicOrdering::Relaxed));
+                    }
+                    let chosen = if strict_tree {
+                        mode_strict_majority_or_leaf(parts.as_mut_slice(), cur, round > 0)
+                    } else if round == 0 {
+                        mode_smallest(parts.as_mut_slice())
+                    } else {
+                        mode_retain_smallest(parts.as_mut_slice(), cur)
+                    };
+                    if chosen != cur {
+                        parents[a].store(chosen, AtomicOrdering::Relaxed);
+                        1usize
+                    } else {
+                        0usize
+                    }
+                })
+                .sum();
+
+            if (b_chg + a_chg) * 100 <= n {
+                break;
+            }
+        }
+    }
+
+    let loop_mem = peak_delta_mb(base_mem);
+    let cleaned = clean_partitions(
+        graph,
+        FastNodePartitioning::initialize_from_partitions(labels),
+    );
+    let total_sec = t0.elapsed().as_secs_f64();
+    let total_mem = peak_delta_mb(base_mem);
+    (cleaned, total_sec, loop_mem, total_mem)
+}
+
 fn run_bipartite_modification(
     graph: &Graph<u8>,
     is_b: &[bool],
@@ -715,7 +1053,11 @@ fn evaluate_variant(
     final_components
 }
 
-fn run_dataset_evaluation(dataset_prefix: &str, shuffle_edges_seed: Option<u64>) {
+fn run_dataset_evaluation(
+    dataset_prefix: &str,
+    shuffle_edges_seed: Option<u64>,
+    only_4cycles: bool,
+) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let path_0pc = manifest_dir
         .join("test_data")
@@ -755,140 +1097,188 @@ fn run_dataset_evaluation(dataset_prefix: &str, shuffle_edges_seed: Option<u64>)
         gt.gt_total_components, gt.gt_cells_ge_8k, graph_load_live_mb
     );
 
-    // 0. Baseline (random tie-breaking)
-    let (p_base, _, l_base, c_base, ml_base, mt_base) =
-        run_queue_flp_variant(&graph_1pc, QueueTieVariant::BaselineRandom, 42);
-    let base_components = evaluate_variant(
-        "0. Queue Baseline (random tie)",
-        &graph_1pc,
-        &gt,
-        p_base,
-        l_base,
-        c_base,
-        ml_base,
-        mt_base,
-        None,
-    );
-
-    // PR #33 (retain + random tie-breaking)
-    let (p_pr33, _, l_pr33, c_pr33, ml_pr33, mt_pr33) =
-        run_queue_flp_variant(&graph_1pc, QueueTieVariant::RetainRandom, 42);
-    let _ = evaluate_variant(
-        "PR#33 Queue (retain + random tie)",
-        &graph_1pc,
-        &gt,
-        p_pr33,
-        l_pr33,
-        c_pr33,
-        ml_pr33,
-        mt_pr33,
-        Some(&base_components),
-    );
-
-    // 1a. Queue: Smallest ID on tie
-    let (p_1a, _, l_1a, c_1a, ml_1a, mt_1a) =
-        run_queue_flp_variant(&graph_1pc, QueueTieVariant::SmallestOnly, 42);
-    let _ = evaluate_variant(
-        "1a. Queue (Smallest ID on tie)",
-        &graph_1pc,
-        &gt,
-        p_1a,
-        l_1a,
-        c_1a,
-        ml_1a,
-        mt_1a,
-        Some(&base_components),
-    );
-
-    // 1b. Queue: Retain + Smallest ID on tie
-    let (p_1b, _, l_1b, c_1b, ml_1b, mt_1b) =
-        run_queue_flp_variant(&graph_1pc, QueueTieVariant::RetainSmallest, 42);
-    let _ = evaluate_variant(
-        "1b. Queue (Retain + Smallest ID)",
-        &graph_1pc,
-        &gt,
-        p_1b,
-        l_1b,
-        c_1b,
-        ml_1b,
-        mt_1b,
-        Some(&base_components),
-    );
-
-    // 2. Convergent Alternating Bipartite FLP (<1% changed, 4T, Smallest ID)
     let is_b = graph_1pc
         .get_bipartite_side_mask()
         .expect("Graph loaded from parquet must have bipartite side mask");
     let bip_loop_only_mb =
         (graph_1pc.get_num_nodes() * std::mem::size_of::<usize>()) as f64 / (1024.0 * 1024.0);
 
-    let base_bip_mem = reset_peak_memory();
-    let t_bip = Instant::now();
-    let p_bip: FastNodePartitioning = alternating_bipartite_flp(
-        &graph_1pc,
-        is_b,
-        DEFAULT_BIPARTITE_FLP_MIN_CHANGED_FRACTION,
-        DEFAULT_BIPARTITE_FLP_MAX_ROUNDS,
-    );
-    let bip_total_flp_sec = t_bip.elapsed().as_secs_f64();
-    let bip_peak_mem_mb = peak_delta_mb(base_bip_mem);
+    let mut base_components_opt: Option<Vec<usize>> = None;
 
-    let _ = evaluate_variant(
-        "2. Alternating Bipartite FLP (<1% changed, Smallest ID)",
-        &graph_1pc,
-        &gt,
-        p_bip,
-        bip_total_flp_sec,
-        0.0,
-        bip_loop_only_mb,
-        bip_peak_mem_mb,
-        Some(&base_components),
-    );
+    if !only_4cycles {
+        // 0. Baseline (random tie-breaking)
+        let (p_base, _, l_base, c_base, ml_base, mt_base) =
+            run_queue_flp_variant(&graph_1pc, QueueTieVariant::BaselineRandom, 42);
+        let base_components = evaluate_variant(
+            "0. Queue Baseline (random tie)",
+            &graph_1pc,
+            &gt,
+            p_base,
+            l_base,
+            c_base,
+            ml_base,
+            mt_base,
+            None,
+        );
 
-    // Test Bipartite modifications on the randomized-edge graph (NO hashing!)
-    for (label, modif) in [
-        (
-            "2a. Bipartite FLP: Hub-Attractor R0 (max deg_A, tie min ID)",
-            BipartiteModification::HubAttractorR0,
-        ),
-        (
-            "2b. Bipartite FLP: Hub-Attractor R0 + StrictMaj A in R0",
-            BipartiteModification::HubAttractorR0StrictMajR0,
-        ),
-        (
-            "2c. Bipartite FLP: Smallest R0 + StrictMaj A in R0",
-            BipartiteModification::SmallestR0StrictMajR0,
-        ),
-        (
-            "2d. Bipartite FLP: Hub-Attractor R0 + StrictMaj A (All Rounds)",
-            BipartiteModification::HubAttractorR0StrictMajAllRounds,
-        ),
-        (
-            "2e. Bipartite FLP: 4-Cycle Supported R0 + Hub + Smallest ID",
-            BipartiteModification::FourCycleSupportedR0,
-        ),
-        (
-            "2f. Bipartite FLP: 4-Cycle Supported R0 + StrictMaj A in R0",
-            BipartiteModification::FourCycleSupportedR0StrictMajR0,
-        ),
-    ] {
-        let (p_mod, sec_mod, mem_mod) = run_bipartite_modification(
+        // PR #33 (retain + random tie-breaking)
+        let (p_pr33, _, l_pr33, c_pr33, ml_pr33, mt_pr33) =
+            run_queue_flp_variant(&graph_1pc, QueueTieVariant::RetainRandom, 42);
+        let _ = evaluate_variant(
+            "PR#33 Queue (retain + random tie)",
+            &graph_1pc,
+            &gt,
+            p_pr33,
+            l_pr33,
+            c_pr33,
+            ml_pr33,
+            mt_pr33,
+            Some(&base_components),
+        );
+
+        // 1a. Queue: Smallest ID on tie
+        let (p_1a, _, l_1a, c_1a, ml_1a, mt_1a) =
+            run_queue_flp_variant(&graph_1pc, QueueTieVariant::SmallestOnly, 42);
+        let _ = evaluate_variant(
+            "1a. Queue (Smallest ID on tie)",
+            &graph_1pc,
+            &gt,
+            p_1a,
+            l_1a,
+            c_1a,
+            ml_1a,
+            mt_1a,
+            Some(&base_components),
+        );
+
+        // 1b. Queue: Retain + Smallest ID on tie
+        let (p_1b, _, l_1b, c_1b, ml_1b, mt_1b) =
+            run_queue_flp_variant(&graph_1pc, QueueTieVariant::RetainSmallest, 42);
+        let _ = evaluate_variant(
+            "1b. Queue (Retain + Smallest ID)",
+            &graph_1pc,
+            &gt,
+            p_1b,
+            l_1b,
+            c_1b,
+            ml_1b,
+            mt_1b,
+            Some(&base_components),
+        );
+
+        let base_bip_mem = reset_peak_memory();
+        let t_bip = Instant::now();
+        let p_bip: FastNodePartitioning = alternating_bipartite_flp(
             &graph_1pc,
             is_b,
-            modif,
             DEFAULT_BIPARTITE_FLP_MIN_CHANGED_FRACTION,
             DEFAULT_BIPARTITE_FLP_MAX_ROUNDS,
         );
+        let bip_total_flp_sec = t_bip.elapsed().as_secs_f64();
+        let bip_peak_mem_mb = peak_delta_mb(base_bip_mem);
+
+        let _ = evaluate_variant(
+            "2. Alternating Bipartite FLP (<1% changed, Smallest ID)",
+            &graph_1pc,
+            &gt,
+            p_bip,
+            bip_total_flp_sec,
+            0.0,
+            bip_loop_only_mb,
+            bip_peak_mem_mb,
+            Some(&base_components),
+        );
+
+        // Test Bipartite modifications on the randomized-edge graph (NO hashing!)
+        for (label, modif) in [
+            (
+                "2a. Bipartite FLP: Hub-Attractor R0 (max deg_A, tie min ID)",
+                BipartiteModification::HubAttractorR0,
+            ),
+            (
+                "2b. Bipartite FLP: Hub-Attractor R0 + StrictMaj A in R0",
+                BipartiteModification::HubAttractorR0StrictMajR0,
+            ),
+            (
+                "2c. Bipartite FLP: Smallest R0 + StrictMaj A in R0",
+                BipartiteModification::SmallestR0StrictMajR0,
+            ),
+            (
+                "2d. Bipartite FLP: Hub-Attractor R0 + StrictMaj A (All Rounds)",
+                BipartiteModification::HubAttractorR0StrictMajAllRounds,
+            ),
+            (
+                "2e. Bipartite FLP: 4-Cycle Supported R0 + Hub + Smallest ID",
+                BipartiteModification::FourCycleSupportedR0,
+            ),
+            (
+                "2f. Bipartite FLP: 4-Cycle Supported R0 + StrictMaj A in R0",
+                BipartiteModification::FourCycleSupportedR0StrictMajR0,
+            ),
+        ] {
+            let (p_mod, sec_mod, mem_mod) = run_bipartite_modification(
+                &graph_1pc,
+                is_b,
+                modif,
+                DEFAULT_BIPARTITE_FLP_MIN_CHANGED_FRACTION,
+                DEFAULT_BIPARTITE_FLP_MAX_ROUNDS,
+            );
+            let _ = evaluate_variant(
+                label,
+                &graph_1pc,
+                &gt,
+                p_mod,
+                sec_mod,
+                0.0,
+                bip_loop_only_mb,
+                mem_mod,
+                Some(&base_components),
+            );
+        }
+        base_components_opt = Some(base_components);
+    } else {
+        let (p_base, _, l_base, c_base, ml_base, mt_base) =
+            run_queue_flp_variant(&graph_1pc, QueueTieVariant::BaselineRandom, 42);
+        let base_components = evaluate_variant(
+            "0. Queue Baseline (random tie)",
+            &graph_1pc,
+            &gt,
+            p_base,
+            l_base,
+            c_base,
+            ml_base,
+            mt_base,
+            None,
+        );
+        base_components_opt = Some(base_components);
+    }
+
+    // Approach 3: Direct 4-Cycle Merging (Union-Find over all 4-cycles in the bipartite graph)
+    for (label, mode) in [
+        (
+            "3a. Merge All 4-Cycles (Union-Find) + Tree FLP",
+            FourCycleMode::UnionFind4CyclesPlusTreeFlp,
+        ),
+        (
+            "3b. Merge All 4-Cycles (Union-Find) + StrictMaj Tree FLP",
+            FourCycleMode::UnionFind4CyclesPlusStrictTreeFlp,
+        ),
+        (
+            "3c. Local 4-Cycle Only R0 + StrictMaj Bipartite FLP",
+            FourCycleMode::Local4CycleSeededBipartiteFlp,
+        ),
+    ] {
+        let (p_fc, sec_fc, loop_mem_fc, tot_mem_fc) = run_four_cycle_merge(&graph_1pc, is_b, mode);
         let _ = evaluate_variant(
             label,
             &graph_1pc,
             &gt,
-            p_mod,
-            sec_mod,
+            p_fc,
+            sec_fc,
             0.0,
-            bip_loop_only_mb,
-            mem_mod,
-            Some(&base_components),
+            loop_mem_fc,
+            tot_mem_fc,
+            base_components_opt.as_deref(),
         );
     }
 }
@@ -896,12 +1286,16 @@ fn run_dataset_evaluation(dataset_prefix: &str, shuffle_edges_seed: Option<u64>)
 fn main() {
     let args: Vec<String> = env::args().collect();
     let mut target = "all".to_string();
+    let mut only_4cycles = false;
     let mut shuffle_seed: Option<u64> = Some(42); // Default: randomize edge order before building graph!
     let mut i = 1;
     while i < args.len() {
         if args[i] == "--dataset" && i + 1 < args.len() {
             target = args[i + 1].clone();
             i += 2;
+        } else if args[i] == "--only-4cycles" {
+            only_4cycles = true;
+            i += 1;
         } else if args[i] == "--no-shuffle" {
             shuffle_seed = None;
             i += 1;
@@ -916,14 +1310,14 @@ fn main() {
 
     match target.as_str() {
         "40" | "40cells" | "mix_40cells" => {
-            run_dataset_evaluation("mix_40cells", shuffle_seed);
+            run_dataset_evaluation("mix_40cells", shuffle_seed, only_4cycles);
         }
         "200" | "200cells" | "mix_200cells" => {
-            run_dataset_evaluation("mix_200cells", shuffle_seed);
+            run_dataset_evaluation("mix_200cells", shuffle_seed, only_4cycles);
         }
         "all" => {
-            run_dataset_evaluation("mix_40cells", shuffle_seed);
-            run_dataset_evaluation("mix_200cells", shuffle_seed);
+            run_dataset_evaluation("mix_40cells", shuffle_seed, only_4cycles);
+            run_dataset_evaluation("mix_200cells", shuffle_seed, only_4cycles);
         }
         other => {
             eprintln!(
