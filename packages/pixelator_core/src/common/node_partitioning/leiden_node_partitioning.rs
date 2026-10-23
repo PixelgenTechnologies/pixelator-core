@@ -30,6 +30,17 @@ impl LeidenNodePartitioning {
         }
     }
 
+    /// Initialize singlet partitions `[0..num_nodes)` without eagerly allocating `num_nodes`
+    /// individual `HashSet`s in `partition_to_node_map`.
+    pub(crate) fn initialize_with_singlet_partitions_stale(num_nodes: NodeIdx) -> Self {
+        LeidenNodePartitioning {
+            node_partition_map: (0..num_nodes).collect(),
+            partition_to_node_map: HashMap::default(),
+            partition_to_node_map_stale: true,
+            new_partition_id: num_nodes,
+        }
+    }
+
     /// Return true of the partition only contains one node
     pub fn is_singlet_partition(&self, partition: &PartitionId) -> bool {
         self.panic_if_partition_to_node_map_stale();
@@ -118,6 +129,25 @@ impl NodePartitioning for LeidenNodePartitioning {
         self.panic_if_partition_to_node_map_stale();
         // NOTE: this overrides the default trait implementation
         self.partition_to_node_map.clone()
+    }
+
+    fn num_partitions(&self) -> usize {
+        if !self.partition_to_node_map_stale {
+            self.partition_to_node_map
+                .values()
+                .filter(|nodes| !nodes.is_empty())
+                .count()
+        } else {
+            let mut present = vec![false; self.new_partition_id];
+            let mut count = 0usize;
+            for &pid in &self.node_partition_map {
+                if !present[pid] {
+                    present[pid] = true;
+                    count += 1;
+                }
+            }
+            count
+        }
     }
 
     /// Update the partition of a given node.

@@ -331,6 +331,9 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
 
     /// Normalize partitions so that all ids from 0 to |P| - 1 are used.
     pub fn normalize_partition(&mut self) {
+        if self.partitions.is_normalized() {
+            return;
+        }
         let partition_index = self.partitions.get_dense_mapping();
 
         self.partitions = LeidenNodePartitioning::initialize_from_partitions(
@@ -361,27 +364,27 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
 
         // filter out empty partitions, and normalize the partition ids from 0..n
         // since this is necessary for building the aggregated graph
-        let mut normalized_partition_map = vec![0; self.partitions.get_new_partition_id()];
-        for (new_pid, (&old_pid, _)) in self
-            .partitions
-            .get_partition_to_node_map_ref()
-            .iter()
-            .filter(|(_, nodes)| !nodes.is_empty())
-            .enumerate()
-        {
-            normalized_partition_map[old_pid] = new_pid;
-        }
-        // Map node ids between the current graph and the aggregated graph
+        let mut normalized_partition_map = vec![usize::MAX; self.partitions.get_new_partition_id()];
+        let mut n_partitions = 0usize;
         let sub_partition_index = self
             .partitions
             .get_node_to_partition_map()
             .iter()
-            .map(|&p_id| normalized_partition_map[p_id])
+            .map(|&p_id| {
+                let mapped = normalized_partition_map[p_id];
+                if mapped == usize::MAX {
+                    let new_pid = n_partitions;
+                    normalized_partition_map[p_id] = new_pid;
+                    n_partitions += 1;
+                    new_pid
+                } else {
+                    mapped
+                }
+            })
             .collect::<Vec<NodeIdx>>();
 
-        let aggregated_graph = self.build_aggregated_graph(&sub_partition_index);
+        let aggregated_graph = self.build_aggregated_graph(&sub_partition_index, n_partitions);
 
-        let n_partitions = self.partitions.num_partitions();
         let (new_partitions, new_node_weights) =
             self.build_new_partitions(&sub_partition_index, super_partitions, n_partitions);
 
@@ -403,9 +406,10 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
     /// The unrefined partitioning becomes super partitioning and is returned by this function,
     /// together with the weights of the super partitions.
     fn refine_partitions(&mut self, randomness: f64) -> (LeidenNodePartitioning, PartitionWeights) {
-        // Reset current partitions and weights to singlet partitions
-        let mut super_partitions =
-            LeidenNodePartitioning::initialize_with_singlet_partitions(self.graph.get_num_nodes());
+        // Reset current partitions and weights to singlet partitions without allocating N HashSets
+        let mut super_partitions = LeidenNodePartitioning::initialize_with_singlet_partitions_stale(
+            self.graph.get_num_nodes(),
+        );
         mem::swap(&mut self.partitions, &mut super_partitions);
 
         // Singlet: partition id equals node id, so weights are a dense copy of node_weights.
@@ -427,20 +431,52 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
     /// `partition_index` maps each node id in the original graph to the id of its aggregated
     /// node (partition) in the new graph. The values are expected to be in the range
     /// `0..num_aggregated_nodes` so they can be used directly as node indices.
-    fn build_aggregated_graph(&self, partition_index: &[NodeIdx]) -> Graph<usize> {
-        let num_aggregated_nodes = self.partitions.num_partitions();
+    fn build_aggregated_graph(
+        &self,
+        partition_index: &[NodeIdx],
+        num_aggregated_nodes: usize,
+    ) -> Graph<usize> {
+        let adj = self.graph.get_adjacency_matrix();
+        let indptr_base = adj.indptr();
+        let indptr = indptr_base
+            .as_slice()
+            .expect("CSR indptr should expose a contiguous slice");
+        let indices = adj.indices();
+        let data = adj.data();
+        let n = self.graph.get_num_nodes();
 
-        Graph::from_edges(
-            self.graph
-                .get_edges_iter()
-                .filter(|Edge { src, dest, .. }| src <= dest)
-                .map(|Edge { src, dest, weight }| Edge {
-                    src: partition_index[src],
-                    dest: partition_index[dest],
-                    weight,
-                }),
-            num_aggregated_nodes,
-        )
+        let mut self_loops = vec![0usize; num_aggregated_nodes];
+        let mut inter_edges = Vec::new();
+        for src in 0..n {
+            let p_src = partition_index[src];
+            for idx in indptr[src]..indptr[src + 1] {
+                let dest = indices[idx];
+                if src <= dest {
+                    let p_dest = partition_index[dest];
+                    let weight = data[idx];
+                    if p_src == p_dest {
+                        self_loops[p_src] += weight;
+                    } else {
+                        inter_edges.push(Edge {
+                            src: p_src,
+                            dest: p_dest,
+                            weight,
+                        });
+                    }
+                }
+            }
+        }
+        for (p, &w) in self_loops.iter().enumerate() {
+            if w > 0 {
+                inter_edges.push(Edge {
+                    src: p,
+                    dest: p,
+                    weight: w,
+                });
+            }
+        }
+
+        Graph::from_edges(inter_edges.into_iter(), num_aggregated_nodes)
     }
 
     /// Generate new partition table and partition weights, based on the new node ids.
@@ -541,12 +577,35 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
         node_subset_size: usize,
         randomness: f64,
     ) {
-        // First consider only nodes that are well connected within the subset
-        let mut well_connected_nodes = node_subset
-            .iter()
-            .filter(|&&node_id| self.node_is_well_connected(node_id, node_subset, node_subset_size))
-            .cloned()
-            .collect::<Vec<NodeIdx>>();
+        if node_subset.len() <= 1 {
+            return;
+        }
+
+        // Precompute cut weight E({v}, S - {v}) for each node v in S.
+        // At the start of refinement, each v in S is in its own singleton community {v},
+        // so E(C_v, S - C_v) == E({v}, S - {v}).
+        // Map each community in S to `(cut_weight, is_singlet)`.
+        let resolution = self.quality_metrics.resolution();
+        let mut community_cut_weights: HashMap<PartitionId, (usize, bool)> =
+            HashMap::with_capacity_and_hasher(node_subset.len(), Default::default());
+        let mut well_connected_nodes = Vec::with_capacity(node_subset.len());
+
+        for &node_id in node_subset.iter() {
+            let node_size = self.node_weights[node_id];
+            let expected_connections_in_subset =
+                resolution * (node_size as f64 * (node_subset_size as f64 - node_size as f64));
+            let actual_edges_in_subset: usize = self
+                .graph
+                .edges_from_iter(node_id)
+                .filter(|Edge { src: _, dest, .. }| *dest != node_id && node_subset.contains(dest))
+                .map(|Edge { weight, .. }| weight)
+                .sum();
+            let pid = self.partitions.get_partition_for_node(&node_id);
+            community_cut_weights.insert(pid, (actual_edges_in_subset, true));
+            if (actual_edges_in_subset as f64) >= expected_connections_in_subset {
+                well_connected_nodes.push(node_id);
+            }
+        }
 
         // Visit them in random order
         well_connected_nodes.shuffle(&mut self.rng);
@@ -558,9 +617,10 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
             // as we are calling this from the  refinement step, all nodes will
             // start in singlet partitions, but as we update this they will potentially
             // end up in larger partitions.
-            if self
-                .partitions
-                .is_singlet_partition(&self.partitions.get_partition_for_node(node))
+            let src_partition = self.partitions.get_partition_for_node(node);
+            if community_cut_weights
+                .get(&src_partition)
+                .is_some_and(|&(_, is_singlet)| is_singlet)
             {
                 community_deltas.clear();
                 let node_size = self.node_weights[*node];
@@ -569,7 +629,6 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
                 // to those communities
                 self.aggregate_edge_weights(*node, &mut aggregated_edge_weights);
 
-                let src_partition = self.partitions.get_partition_for_node(node);
                 let src_size = self.partition_weights.get(src_partition);
                 let src_weight = aggregated_edge_weights
                     .iter()
@@ -582,11 +641,16 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
                     aggregated_edge_weights
                         .iter()
                         .filter(|(community_id, _)| {
-                            self.community_is_well_connected(
-                                community_id,
-                                node_subset,
-                                node_subset_size,
-                            )
+                            if let Some(&(actual_edge_count, _)) =
+                                community_cut_weights.get(community_id)
+                            {
+                                let community_size = self.partition_weights.get(*community_id);
+                                let expected_edges = (resolution * community_size as f64)
+                                    * (node_subset_size as f64 - community_size as f64);
+                                (actual_edge_count as f64) >= expected_edges
+                            } else {
+                                false
+                            }
                         })
                         .map(|&(community_id, total_edge_weight)| {
                             (
@@ -613,7 +677,23 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
                     randomness,
                     &mut self.rng,
                 );
-                self.update_partition_slow(*node, partition_idx);
+                if partition_idx != src_partition {
+                    let (cut_u, _) = community_cut_weights
+                        .remove(&src_partition)
+                        .unwrap_or((0, false));
+                    let edge_u_to_dest = aggregated_edge_weights
+                        .iter()
+                        .find(|&&(c, _)| c == partition_idx)
+                        .map(|&(_, w)| w)
+                        .unwrap_or(0);
+                    if let Some((dest_cut, dest_is_singlet)) =
+                        community_cut_weights.get_mut(&partition_idx)
+                    {
+                        *dest_cut = (*dest_cut + cut_u).saturating_sub(2 * edge_u_to_dest);
+                        *dest_is_singlet = false;
+                    }
+                }
+                self.update_partition_fast(*node, partition_idx);
             }
         }
     }
@@ -682,30 +762,39 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
     /// Given a graph and a partitioning, computes the quality of this partitioning, based on the
     /// implementation of the resolution and node size functions.
     pub fn quality(&self) -> f64 {
-        self.partitions
-            .get_partition_to_node_map_ref()
-            .iter()
-            .map(|(&partition_id, nodes_in_partition)| {
-                let subset_size = self.partition_weights.get(partition_id);
-                let edge_count_in_partition = self
-                    .graph
-                    .get_edges_in_selection(nodes_in_partition)
-                    .filter(|Edge { src, dest, .. }| {
-                        nodes_in_partition.contains(src) && nodes_in_partition.contains(dest)
-                    })
-                    .map(
-                        |Edge {
-                             src: _,
-                             dest: _,
-                             weight,
-                         }| weight,
-                    )
-                    .sum::<usize>();
+        let max_pid = self.partitions.get_new_partition_id();
+        let node_to_partition = self.partitions.get_node_to_partition_map();
+        let mut edge_count_in_partition = vec![0usize; max_pid];
+        let mut has_nodes = vec![false; max_pid];
+        for &pid in node_to_partition {
+            has_nodes[pid] = true;
+        }
 
+        let adj = self.graph.get_adjacency_matrix();
+        let indptr_base = adj.indptr();
+        let indptr = indptr_base
+            .as_slice()
+            .expect("CSR indptr should expose a contiguous slice");
+        let indices = adj.indices();
+        let data = adj.data();
+        for src in 0..self.graph.get_num_nodes() {
+            let p_src = node_to_partition[src];
+            for idx in indptr[src]..indptr[src + 1] {
+                let dest = indices[idx];
+                if src <= dest && p_src == node_to_partition[dest] {
+                    edge_count_in_partition[p_src] += data[idx];
+                }
+            }
+        }
+
+        let resolution = self.quality_metrics.resolution();
+        (0..max_pid)
+            .filter(|&pid| has_nodes[pid])
+            .map(|pid| {
+                let subset_size = self.partition_weights.get(pid);
                 let possible_pairs_in_community =
                     (subset_size as f64 * (subset_size as f64 - 1.0)) / 2.0;
-                edge_count_in_partition as f64
-                    - self.quality_metrics.resolution() * possible_pairs_in_community
+                edge_count_in_partition[pid] as f64 - resolution * possible_pairs_in_community
             })
             .sum()
     }

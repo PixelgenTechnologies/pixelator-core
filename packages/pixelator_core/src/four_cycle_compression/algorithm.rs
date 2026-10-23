@@ -1,11 +1,10 @@
 use rayon::prelude::*;
 use smallvec::SmallVec;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::common::graph::Graph;
 use crate::common::node_partitioning::NodePartitioning;
 use crate::common::types::PartitionId;
-use crate::fast_label_propagation::algorithm::clean_partitions;
 
 /// Strategy for handling non-4-cycle nodes after merging all 4-cycles in a bipartite graph.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -134,13 +133,22 @@ where
             let start_u = indptr[u];
             let end_u = indptr[u + 1];
 
-            let mut wedges = SmallVec::<[(usize, usize); 64]>::new();
+            let mut low_neighbors = SmallVec::<[usize; 16]>::new();
             for &v in &indices[start_u..end_u] {
-                if (degrees[v], v) >= rank_u {
-                    continue;
+                let deg_v = degrees[v];
+                if deg_v >= 2 && (deg_v, v) < rank_u {
+                    low_neighbors.push(v);
                 }
+            }
+            if low_neighbors.len() < 2 {
+                return;
+            }
+
+            let mut wedges = SmallVec::<[(usize, usize); 64]>::new();
+            for &v in &low_neighbors {
                 for &w in &indices[indptr[v]..indptr[v + 1]] {
-                    if (degrees[w], w) < rank_u {
+                    let deg_w = degrees[w];
+                    if deg_w >= 2 && (deg_w, w) < rank_u {
                         wedges.push((w, v));
                     }
                 }
@@ -168,19 +176,20 @@ where
             }
         });
 
-        // Flatten Union-Find trees
-        (0..n).into_par_iter().with_min_len(4096).for_each(|u| {
-            let r = atomic_find(parents, u);
-            parents[u].store(r, Ordering::Relaxed);
-        });
-
-        let mut in_four_cycle = vec![false; n];
-        for u in 0..n {
-            let r = parents[u].load(Ordering::Relaxed);
-            if r != u {
-                in_four_cycle[u] = true;
-                in_four_cycle[r] = true;
-            }
+        // Flatten Union-Find trees and mark 4-cycle core membership in a single parallel pass
+        let in_four_cycle = vec![false; n];
+        {
+            let in_fc_atomic: &[AtomicBool] = unsafe {
+                std::slice::from_raw_parts(in_four_cycle.as_ptr() as *const AtomicBool, n)
+            };
+            (0..n).into_par_iter().with_min_len(4096).for_each(|u| {
+                let r = atomic_find(parents, u);
+                parents[u].store(r, Ordering::Relaxed);
+                if r != u {
+                    in_fc_atomic[u].store(true, Ordering::Relaxed);
+                    in_fc_atomic[r].store(true, Ordering::Relaxed);
+                }
+            });
         }
 
         // Step 2: Handle non-4-cycle nodes according to `bridge_mode`
@@ -314,9 +323,57 @@ where
                 });
             }
         }
-    }
 
-    clean_partitions(graph, P::initialize_from_partitions(labels))
+        // Mark all nodes belonging to multi-node partitions (`p != u`) in `in_four_cycle`
+        // so singleton partitions (`!in_four_cycle[start]`) can skip CSR neighbor scans in O(1).
+        let in_fc_atomic: &[AtomicBool] =
+            unsafe { std::slice::from_raw_parts(in_four_cycle.as_ptr() as *const AtomicBool, n) };
+        (0..n).into_par_iter().with_min_len(4096).for_each(|u| {
+            let p = parents[u].load(Ordering::Relaxed);
+            if p != u {
+                in_fc_atomic[u].store(true, Ordering::Relaxed);
+                in_fc_atomic[p].store(true, Ordering::Relaxed);
+            }
+        });
+
+        const UNVISITED: usize = usize::MAX;
+        let mut comp_labels = vec![UNVISITED; n];
+        let mut queue = std::collections::VecDeque::new();
+        let mut component_id = 0usize;
+
+        for start in 0..n {
+            if !in_four_cycle[start] {
+                comp_labels[start] = component_id;
+                component_id += 1;
+                continue;
+            }
+            if comp_labels[start] != UNVISITED {
+                continue;
+            }
+            let id = component_id;
+            component_id += 1;
+            let target_label = labels[start];
+            comp_labels[start] = id;
+            for &neighbor in &indices[indptr[start]..indptr[start + 1]] {
+                if comp_labels[neighbor] == UNVISITED && labels[neighbor] == target_label {
+                    comp_labels[neighbor] = id;
+                    queue.push_back(neighbor);
+                }
+            }
+            while let Some(node) = queue.pop_front() {
+                for &neighbor in &indices[indptr[node]..indptr[node + 1]] {
+                    if comp_labels[neighbor] == UNVISITED && labels[neighbor] == target_label {
+                        comp_labels[neighbor] = id;
+                        queue.push_back(neighbor);
+                    }
+                }
+            }
+        }
+
+        drop(in_four_cycle);
+        drop(labels);
+        P::initialize_from_partitions(comp_labels)
+    }
 }
 
 #[cfg(test)]

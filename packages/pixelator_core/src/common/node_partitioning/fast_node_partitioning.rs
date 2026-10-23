@@ -51,6 +51,13 @@ impl NodePartitioning for FastNodePartitioning {
             .map(|old_pid| partition_map[old_pid])
             .collect();
     }
+
+    fn into_node_partitioning<T: NodePartitioning>(self) -> T
+    where
+        Self: Sized,
+    {
+        T::initialize_from_partitions(self.node_partition_map)
+    }
 }
 
 #[cfg(test)]

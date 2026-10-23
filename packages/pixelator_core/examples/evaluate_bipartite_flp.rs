@@ -290,13 +290,6 @@ fn run_four_cycle_merge(
     let base_mem = reset_peak_memory();
     let t0 = Instant::now();
 
-    let mut labels: Vec<PartitionId> = (0..n).collect();
-    let adj = graph.get_adjacency_matrix();
-    let indptr_raw = adj.indptr();
-    let indptr = indptr_raw.as_slice().unwrap();
-    let indices = adj.indices();
-    let degrees = graph.get_degrees();
-
     if matches!(mode, FourCycleMode::UnionFind4CyclesPlusStrictTreeFlp) {
         let cleaned: FastNodePartitioning =
             four_cycle_compression(graph, is_b, FourCycleBridgeMode::StrictMajorityOnly, 4);
@@ -314,6 +307,13 @@ fn run_four_cycle_merge(
         let loop_mem = (n * std::mem::size_of::<usize>()) as f64 / (1024.0 * 1024.0);
         return (cleaned, total_sec, loop_mem, total_mem);
     }
+
+    let mut labels: Vec<PartitionId> = (0..n).collect();
+    let adj = graph.get_adjacency_matrix();
+    let indptr_raw = adj.indptr();
+    let indptr = indptr_raw.as_slice().unwrap();
+    let indices = adj.indices();
+    let degrees = graph.get_degrees();
 
     if matches!(mode, FourCycleMode::Local4CycleSeededBipartiteFlp) {
         // Local 4-Cycle Seeded Bipartite FLP:
@@ -442,13 +442,22 @@ fn run_four_cycle_merge(
             let start_u = indptr[u];
             let end_u = indptr[u + 1];
 
-            let mut wedges = SmallVec::<[(usize, usize); 64]>::new();
+            let mut low_neighbors = SmallVec::<[usize; 16]>::new();
             for &v in &indices[start_u..end_u] {
-                if (degrees[v], v) >= rank_u {
-                    continue;
+                let deg_v = degrees[v];
+                if deg_v >= 2 && (deg_v, v) < rank_u {
+                    low_neighbors.push(v);
                 }
+            }
+            if low_neighbors.len() < 2 {
+                return;
+            }
+
+            let mut wedges = SmallVec::<[(usize, usize); 64]>::new();
+            for &v in &low_neighbors {
                 for &w in &indices[indptr[v]..indptr[v + 1]] {
-                    if (degrees[w], w) < rank_u {
+                    let deg_w = degrees[w];
+                    if deg_w >= 2 && (deg_w, w) < rank_u {
                         wedges.push((w, v));
                     }
                 }
@@ -476,18 +485,22 @@ fn run_four_cycle_merge(
             }
         });
 
-        (0..n).into_par_iter().with_min_len(4096).for_each(|u| {
-            let r = atomic_find(parents, u);
-            parents[u].store(r, AtomicOrdering::Relaxed);
-        });
-
-        let mut in_four_cycle = vec![false; n];
-        for u in 0..n {
-            let r = parents[u].load(AtomicOrdering::Relaxed);
-            if r != u {
-                in_four_cycle[u] = true;
-                in_four_cycle[r] = true;
-            }
+        let in_four_cycle = vec![false; n];
+        {
+            let in_fc_atomic: &[std::sync::atomic::AtomicBool] = unsafe {
+                std::slice::from_raw_parts(
+                    in_four_cycle.as_ptr() as *const std::sync::atomic::AtomicBool,
+                    n,
+                )
+            };
+            (0..n).into_par_iter().with_min_len(4096).for_each(|u| {
+                let r = atomic_find(parents, u);
+                parents[u].store(r, AtomicOrdering::Relaxed);
+                if r != u {
+                    in_fc_atomic[u].store(true, AtomicOrdering::Relaxed);
+                    in_fc_atomic[r].store(true, AtomicOrdering::Relaxed);
+                }
+            });
         }
 
         // Diagnose why 850k nodes are NOT in 4-cycles:
@@ -1117,7 +1130,7 @@ fn evaluate_variant(
     let base_leiden_mem = reset_peak_memory();
     let t_leiden = Instant::now();
     let quality_function = Modularity::new(1.0, graph_1pc.get_total_edge_weight());
-    let graph_usize = Graph::<usize>::from(graph_1pc.clone());
+    let graph_usize = Graph::<usize>::from(graph_1pc);
     let partition: LeidenNodePartitioning = NodePartitioning::into_node_partitioning(flp_partition);
 
     let mut wp_graph =
