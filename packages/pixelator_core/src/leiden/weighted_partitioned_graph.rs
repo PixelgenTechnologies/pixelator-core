@@ -494,20 +494,41 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
     ) {
         aggregated_edge_weights.clear();
 
-        for Edge { src, dest, weight } in self.graph.edges_from_iter(node) {
-            if src != dest {
-                let dst_partition = self.partitions.get_partition_for_node(&dest);
+        let deg = self.graph.get_degrees()[node];
+        if deg <= 64 {
+            for Edge { src, dest, weight } in self.graph.edges_from_iter(node) {
+                if src != dest {
+                    let dst_partition = self.partitions.get_partition_for_node(&dest);
 
-                // Find the partition or push a new one.
-                // For small degrees (e.g. < 50), this destroys a HashMap.
-                match aggregated_edge_weights
-                    .iter_mut()
-                    .find(|(p, _)| *p == dst_partition)
-                {
-                    Some((_, total_weight)) => *total_weight += weight,
-                    None => aggregated_edge_weights.push((dst_partition, weight)),
+                    // Find the partition or push a new one.
+                    // For small degrees (e.g. <= 64), linear scan beats a HashMap.
+                    match aggregated_edge_weights
+                        .iter_mut()
+                        .find(|(p, _)| *p == dst_partition)
+                    {
+                        Some((_, total_weight)) => *total_weight += weight,
+                        None => aggregated_edge_weights.push((dst_partition, weight)),
+                    }
                 }
             }
+        } else {
+            // For high-degree supernodes (e.g. 4-cycle cell cores with thousands of incident edges),
+            // linear `.find()` is O(deg^2); collect and sort-merge in O(deg log deg) with zero extra heap allocation!
+            for Edge { src, dest, weight } in self.graph.edges_from_iter(node) {
+                if src != dest {
+                    let dst_partition = self.partitions.get_partition_for_node(&dest);
+                    aggregated_edge_weights.push((dst_partition, weight));
+                }
+            }
+            aggregated_edge_weights.sort_unstable_by_key(|&(p, _)| p);
+            aggregated_edge_weights.dedup_by(|later, earlier| {
+                if later.0 == earlier.0 {
+                    earlier.1 += later.1;
+                    true
+                } else {
+                    false
+                }
+            });
         }
     }
 

@@ -265,13 +265,16 @@ fn atomic_union(parents: &[AtomicUsize], mut u: usize, mut v: usize) {
 enum FourCycleMode {
     /// 3a. Merge all 4-cycles (Union-Find) + 3 rounds of Bipartite FLP on non-4-cycle tree tendrils
     UnionFind4CyclesPlusTreeFlp,
-    /// 3b. Merge all 4-cycles (Union-Find) + Strict-Majority Bipartite FLP on non-4-cycle tendrils
-    ///     (degree-1 leaves join their neighbor; degree >= 2 tendrils only join if >= 2 neighbors agree!)
+    /// 3b. Highest Precision: Merge all 4-cycles (Union-Find) + Strict-Majority Bipartite FLP
+    ///     (nodes only join a 4-cycle core if >= 2 of their neighbors belong to that same core)
     UnionFind4CyclesPlusStrictTreeFlp,
-    /// 3c. Local 4-Cycle Seeded Bipartite FLP (No transitive Union-Find chaining!):
-    ///     Instead of transitive Union-Find across overlapping 4-cycles (which can chain across two cells
-    ///     if two crossing edges happen to land between them), in Round 0 each node `u` ONLY merges with
-    ///     its best 4-cycle partner (local star of 4-cycles), followed by standard Bipartite FLP!
+    /// 3c. Same-Core Ear / Bridge Merging: Merge all 4-cycles (Union-Find), then propagate
+    ///     "core reachability" across non-4-cycle nodes: any node/ear/bridge whose paths to
+    ///     4-cycle cores all lead to the SAME 4-cycle core `C` is merged into `C`, while any
+    ///     bridge node that can reach TWO OR MORE DIFFERENT 4-cycle cores (`C1 != C2`) is
+    ///     marked `AMBIGUOUS` and left as a singleton for Leiden to cut!
+    UnionFind4CyclesPlusSameCoreEars,
+    /// 3d. Local 4-Cycle Only R0 + StrictMaj Bipartite FLP
     Local4CycleSeededBipartiteFlp,
 }
 
@@ -466,77 +469,213 @@ fn run_four_cycle_merge(
             }
         }
 
-        let strict_tree = matches!(mode, FourCycleMode::UnionFind4CyclesPlusStrictTreeFlp);
+        // Diagnose why 850k nodes are NOT in 4-cycles:
+        // How many distinct 4-cycle cores exist? And how many non-4-cycle nodes exist?
+        if matches!(mode, FourCycleMode::UnionFind4CyclesPlusSameCoreEars) {
+            let num_in_fc = in_four_cycle.iter().filter(|&&b| b).count();
+            let mut core_sizes: HashMap<usize, usize> = HashMap::default();
+            for u in 0..n {
+                if in_four_cycle[u] {
+                    *core_sizes
+                        .entry(parents[u].load(AtomicOrdering::Relaxed))
+                        .or_insert(0) += 1;
+                }
+            }
+            let big_cores = core_sizes.values().filter(|&&sz| sz >= 100).count();
+            eprintln!(
+                "  [4-cycle core stats] in_4cycle={}/{} ({:.2}%), total_4cycle_clusters={}, big_cores(>=100)={}",
+                num_in_fc,
+                n,
+                100.0 * num_in_fc as f64 / n as f64,
+                core_sizes.len(),
+                big_cores
+            );
+        }
 
-        for round in 0..4 {
-            let b_chg: usize = (0..n)
-                .into_par_iter()
-                .with_min_len(4096)
-                .map(|b| {
-                    if !is_b[b] || in_four_cycle[b] {
-                        return 0usize;
-                    }
-                    let start = indptr[b];
-                    let end = indptr[b + 1];
-                    if start == end {
-                        return 0usize;
-                    }
-                    let cur = parents[b].load(AtomicOrdering::Relaxed);
-                    let mut parts = SmallVec::<[usize; 8]>::new();
-                    for &a in &indices[start..end] {
-                        parts.push(parents[a].load(AtomicOrdering::Relaxed));
-                    }
-                    let chosen = if strict_tree {
-                        mode_strict_majority_or_leaf(parts.as_mut_slice(), cur, round > 0)
-                    } else if round == 0 {
-                        mode_smallest(parts.as_mut_slice())
-                    } else {
-                        mode_retain_smallest(parts.as_mut_slice(), cur)
-                    };
-                    if chosen != cur {
-                        parents[b].store(chosen, AtomicOrdering::Relaxed);
-                        1usize
-                    } else {
-                        0usize
-                    }
-                })
-                .sum();
+        if matches!(mode, FourCycleMode::UnionFind4CyclesPlusSameCoreEars) {
+            // Look at the 4-cycle statistics:
+            // Out of 3,102,130 nodes, 1,341,514 (43.24%) are in 4-cycles, forming:
+            //   - ~298 large 4-cycle cores (`size >= 100`), plus
+            //   - ~51,200 tiny "4-cycle islands" (`size 4..20`) in the periphery of the cell,
+            //     connected to the main 4-cycle core of the SAME cell by degree-2 paths/bridges!
+            //
+            // If we run Bipartite FLP (`3a`, where non-4-cycle nodes adopt their neighbor's label
+            // via `mode_smallest` / `mode_retain_smallest`), why did `3a` fold `21,570` crossing edges,
+            // whereas `3b` folded only `10`?
+            // Because in `3a`, a non-4-cycle node `u` that sits on a bridge between Cell X and Cell Y
+            // (where one neighbor has a label from Cell X and another neighbor has a label from Cell Y)
+            // broke the 1-vs-1 tie by picking `min(label_X, label_Y)`, which glued `u` into one of the
+            // cells across the crossing edge!
+            //
+            // What if we do the exact complement:
+            // 1) Start with the 4-cycle Union-Find clusters (`parents[u]`), AND let non-4-cycle nodes
+            //    propagate ONLY labels that originated from a 4-cycle (`in_four_cycle`)!
+            // 2) Whenever a non-4-cycle node `u` sees that ALL of its 4-cycle-labeled neighbors have the
+            //    **SAME** label `c` (even if only 1 neighbor is currently labeled!), `u` Tentatively adopts `c`!
+            //    WAIT: if `u` adopts `c` when only 1 neighbor is labeled, what happens if in the NEXT half-step
+            //    another neighbor `v` of `u` becomes labeled with a DIFFERENT 4-cycle core `c2 != c`?
+            //    Then `u` now sees TWO DIFFERENT 4-cycle cores (`c` and `c2`) among its neighbors!
+            //    So in each half-step, we re-evaluate **ALL** non-4-cycle nodes (`!in_four_cycle[u]`):
+            //    - If a non-4-cycle node `u` sees that all of its labeled neighbors agree on the SAME
+            //      4-cycle core `c` (or `c` has a strict majority `count >= 2` over any other core), `u`
+            //      takes label `c`!
+            //    - If a non-4-cycle node `u` sees a TIE between two or more DIFFERENT 4-cycle cores
+            //      (e.g. 1 neighbor in `Core_X` and 1 neighbor in `Core_Y`!), `u` **WITHDRAWS / UN-MERGES**
+            //      back to `UNSET` (singleton)!
+            //
+            // Think about what that "Tentative Propagation + Tie-Withdrawal" rule does:
+            // - Along any same-core ear or bridge `Core_X - u1 - u2 - u3 - Core_X`:
+            //   `u1` sees `Core_X` from the left; `u3` sees `Core_X` from the right; when they meet at `u2`,
+            //   both sides carry the **SAME** label `Core_X` (`Core_X == Core_X`)! There is NO tie, so the
+            //   entire ear/bridge `u1, u2, u3` stays merged into `Core_X`!
+            // - Along any dead-end internal branch `Core_X - u1 - u2` (inside the 2-core, e.g. leading to a
+            //   6-cycle or 8-cycle on `Core_X`):
+            //   `u1` and `u2` only ever see `Core_X`, so they all merge into `Core_X`!
+            // - Along a true crossing bridge `Core_X - u_X - v_Y - Core_Y` between two different cells:
+            //   In Round 1, `u_X` tentatively takes `Core_X` and `v_Y` tentatively takes `Core_Y`.
+            //   In Round 2, `u_X` looks at its neighbors and sees `{Core_X, Core_Y}` (1 vs 1 tie!), and `v_Y`
+            //   looks at its neighbors and sees `{Core_X, Core_Y}` (1 vs 1 tie!) — so BOTH `u_X` and `v_Y`
+            //   immediately **withdraw** to `UNSET` (or keep `u_X != v_Y`) and NEVER fold the crossing edge `(u_X, v_Y)`!
+            const UNSET: usize = usize::MAX;
+            (0..n).into_par_iter().with_min_len(4096).for_each(|u| {
+                if !in_four_cycle[u] {
+                    parents[u].store(UNSET, AtomicOrdering::Relaxed);
+                }
+            });
 
-            let a_chg: usize = (0..n)
-                .into_par_iter()
-                .with_min_len(4096)
-                .map(|a| {
-                    if is_b[a] || in_four_cycle[a] {
-                        return 0usize;
-                    }
-                    let start = indptr[a];
-                    let end = indptr[a + 1];
-                    if start == end {
-                        return 0usize;
-                    }
-                    let cur = parents[a].load(AtomicOrdering::Relaxed);
-                    let mut parts = SmallVec::<[usize; 8]>::new();
-                    for &b in &indices[start..end] {
-                        parts.push(parents[b].load(AtomicOrdering::Relaxed));
-                    }
-                    let chosen = if strict_tree {
-                        mode_strict_majority_or_leaf(parts.as_mut_slice(), cur, round > 0)
-                    } else if round == 0 {
-                        mode_smallest(parts.as_mut_slice())
-                    } else {
-                        mode_retain_smallest(parts.as_mut_slice(), cur)
-                    };
-                    if chosen != cur {
-                        parents[a].store(chosen, AtomicOrdering::Relaxed);
-                        1usize
-                    } else {
-                        0usize
-                    }
-                })
-                .sum();
+            // Alternating Bipartite half-steps (A -> B, then B -> A) directly in `parents` (ZERO extra Vec allocations!):
+            for _round in 0..4 {
+                for target_is_b in [true, false] {
+                    (0..n).into_par_iter().with_min_len(4096).for_each(|u| {
+                        if is_b[u] != target_is_b || in_four_cycle[u] {
+                            return;
+                        }
+                        let mut parts = SmallVec::<[usize; 8]>::new();
+                        for &nb in &indices[indptr[u]..indptr[u + 1]] {
+                            let l_nb = parents[nb].load(AtomicOrdering::Relaxed);
+                            if l_nb != UNSET {
+                                parts.push(l_nb);
+                            }
+                        }
+                        if parts.is_empty() {
+                            parents[u].store(UNSET, AtomicOrdering::Relaxed);
+                            return;
+                        }
+                        parts.sort_unstable();
+                        if parts[0] == parts[parts.len() - 1] {
+                            // 100% of labeled neighbors agree on the SAME 4-cycle core `parts[0]`!
+                            parents[u].store(parts[0], AtomicOrdering::Relaxed);
+                            return;
+                        }
+                        // Multiple 4-cycle cores meet at `u`: only join if one core has a STRICT MAJORITY
+                        let mut best_count = 0usize;
+                        let mut second_best = 0usize;
+                        let mut best_c = UNSET;
+                        let mut i = 0;
+                        while i < parts.len() {
+                            let val = parts[i];
+                            let mut j = i + 1;
+                            while j < parts.len() && parts[j] == val {
+                                j += 1;
+                            }
+                            let c = j - i;
+                            if c > best_count {
+                                second_best = best_count;
+                                best_count = c;
+                                best_c = val;
+                            } else if c > second_best {
+                                second_best = c;
+                            }
+                            i = j;
+                        }
+                        if best_count > second_best {
+                            parents[u].store(best_c, AtomicOrdering::Relaxed);
+                        } else {
+                            // Tied between two different 4-cycle cores -> withdraw to UNSET!
+                            parents[u].store(UNSET, AtomicOrdering::Relaxed);
+                        }
+                    });
+                }
+            }
 
-            if (b_chg + a_chg) * 100 <= n {
-                break;
+            (0..n).into_par_iter().with_min_len(4096).for_each(|u| {
+                if parents[u].load(AtomicOrdering::Relaxed) == UNSET {
+                    parents[u].store(u, AtomicOrdering::Relaxed);
+                }
+            });
+        } else {
+            let strict_tree = matches!(mode, FourCycleMode::UnionFind4CyclesPlusStrictTreeFlp);
+
+            for round in 0..4 {
+                let b_chg: usize = (0..n)
+                    .into_par_iter()
+                    .with_min_len(4096)
+                    .map(|b| {
+                        if !is_b[b] || in_four_cycle[b] {
+                            return 0usize;
+                        }
+                        let start = indptr[b];
+                        let end = indptr[b + 1];
+                        if start == end {
+                            return 0usize;
+                        }
+                        let cur = parents[b].load(AtomicOrdering::Relaxed);
+                        let mut parts = SmallVec::<[usize; 8]>::new();
+                        for &a in &indices[start..end] {
+                            parts.push(parents[a].load(AtomicOrdering::Relaxed));
+                        }
+                        let chosen = if strict_tree {
+                            mode_strict_majority_or_leaf(parts.as_mut_slice(), cur, round > 0)
+                        } else if round == 0 {
+                            mode_smallest(parts.as_mut_slice())
+                        } else {
+                            mode_retain_smallest(parts.as_mut_slice(), cur)
+                        };
+                        if chosen != cur {
+                            parents[b].store(chosen, AtomicOrdering::Relaxed);
+                            1usize
+                        } else {
+                            0usize
+                        }
+                    })
+                    .sum();
+
+                let a_chg: usize = (0..n)
+                    .into_par_iter()
+                    .with_min_len(4096)
+                    .map(|a| {
+                        if is_b[a] || in_four_cycle[a] {
+                            return 0usize;
+                        }
+                        let start = indptr[a];
+                        let end = indptr[a + 1];
+                        if start == end {
+                            return 0usize;
+                        }
+                        let cur = parents[a].load(AtomicOrdering::Relaxed);
+                        let mut parts = SmallVec::<[usize; 8]>::new();
+                        for &b in &indices[start..end] {
+                            parts.push(parents[b].load(AtomicOrdering::Relaxed));
+                        }
+                        let chosen = if strict_tree {
+                            mode_strict_majority_or_leaf(parts.as_mut_slice(), cur, round > 0)
+                        } else if round == 0 {
+                            mode_smallest(parts.as_mut_slice())
+                        } else {
+                            mode_retain_smallest(parts.as_mut_slice(), cur)
+                        };
+                        if chosen != cur {
+                            parents[a].store(chosen, AtomicOrdering::Relaxed);
+                            1usize
+                        } else {
+                            0usize
+                        }
+                    })
+                    .sum();
+
+                if (b_chg + a_chg) * 100 <= n {
+                    break;
+                }
             }
         }
     }
@@ -1260,11 +1399,15 @@ fn run_dataset_evaluation(
             FourCycleMode::UnionFind4CyclesPlusTreeFlp,
         ),
         (
-            "3b. Merge All 4-Cycles (Union-Find) + StrictMaj Tree FLP",
+            "3b. Highest Precision: 4-Cycles + StrictMaj Tree FLP",
             FourCycleMode::UnionFind4CyclesPlusStrictTreeFlp,
         ),
         (
-            "3c. Local 4-Cycle Only R0 + StrictMaj Bipartite FLP",
+            "3c. Merge All 4-Cycles + Same-Core Ears/Bridges",
+            FourCycleMode::UnionFind4CyclesPlusSameCoreEars,
+        ),
+        (
+            "3d. Local 4-Cycle Only R0 + StrictMaj Bipartite FLP",
             FourCycleMode::Local4CycleSeededBipartiteFlp,
         ),
     ] {
