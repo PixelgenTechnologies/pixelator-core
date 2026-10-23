@@ -1,41 +1,45 @@
 use std::hash::{BuildHasherDefault, Hasher};
 
-use rustc_hash::FxHasher;
-
 use crate::common::types::{Edge, EdgeWeight, NodeIdx, UMI, UMIPair};
 
-/// Hasher for UMI keys: FxHash followed by the murmur3 `fmix64` finalizer.
+/// Hasher for single-integer UMI keys using a 128-bit widening multiply-xor (`wymix`).
 ///
-/// FxHash only spreads keys well for tables up to 2^26 buckets; for larger tables part of the
+/// `FxHasher` only spreads keys well for tables up to 2^26 buckets; for larger tables part of the
 /// bucket index comes straight from the key's lowest bits, so biased UMIs pile up in part of the
-/// table and probe sequences get very long. The finalizer lets every UMI bit affect every hash bit.
+/// table and probe sequences get very long.
+///
+/// Pre-XORing with a 64-bit constant activates all 64 bits regardless of UMI length (1..=32 bases),
+/// and XORing the low and high halves of the 64x64 -> 128-bit product lets every UMI bit affect
+/// every output bit (both low/high bucket index bits and `hashbrown`'s top-7 `h2` tag bits) in a
+/// single hardware multiply instruction.
 #[derive(Default)]
-struct UmiHasher(FxHasher);
+struct UmiHasher(u64);
 
 impl Hasher for UmiHasher {
     #[inline]
     fn write(&mut self, bytes: &[u8]) {
-        self.0.write(bytes);
+        let mut h = self.0;
+        for &b in bytes {
+            h = h.rotate_left(8) ^ u64::from(b);
+        }
+        self.0 = h;
     }
 
     #[inline]
     fn write_u64(&mut self, i: u64) {
-        self.0.write_u64(i);
+        self.0 = i;
     }
 
     #[inline]
     fn write_usize(&mut self, i: usize) {
-        self.0.write_usize(i);
+        self.0 = i as u64;
     }
 
     #[inline]
     fn finish(&self) -> u64 {
-        let mut h = self.0.finish();
-        h ^= h >> 33;
-        h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
-        h ^= h >> 33;
-        h = h.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
-        h ^ (h >> 33)
+        let full =
+            u128::from(self.0 ^ 0xf135_7aea_2e62_a9c5).wrapping_mul(0x9e37_79b9_7f4a_7c15_u128);
+        (full as u64) ^ ((full >> 64) as u64)
     }
 }
 
@@ -208,6 +212,22 @@ mod tests {
             .collect();
 
         assert_eq!(high_bucket_bits.len(), 16);
+
+        // When only high UMI bits (bases 21..=28, bits 40..56) vary, low bucket bits, high
+        // bucket bits (26..34), and hashbrown's top-7 control tag bits (57..64) must all spread.
+        let low_bucket_bits: rustc_hash::FxHashSet<u64> = (0..10_000usize)
+            .map(|i| hasher.hash_one(((i & 0xFFFF) << 40) | 0x0012_3456_789A) & 0xFF)
+            .collect();
+        let high_bucket_bits_wide: rustc_hash::FxHashSet<u64> = (0..10_000usize)
+            .map(|i| (hasher.hash_one(((i & 0xFFFF) << 40) | 0x0012_3456_789A) >> 26) & 0xFF)
+            .collect();
+        let h2_tag_bits: rustc_hash::FxHashSet<u64> = (0..10_000usize)
+            .map(|i| hasher.hash_one(((i & 0xFFFF) << 40) | 0x0012_3456_789A) >> 57)
+            .collect();
+
+        assert_eq!(low_bucket_bits.len(), 256);
+        assert_eq!(high_bucket_bits_wide.len(), 256);
+        assert_eq!(h2_tag_bits.len(), 128);
     }
 
     #[test]
