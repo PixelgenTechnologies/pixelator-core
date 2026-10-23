@@ -95,12 +95,12 @@ fn load_graph_from_parquet_with_edge_order(
         .into_iter()
         .map(|(src, dest)| {
             let u = umi_mapping.get_or_insert(src);
-            if u >= is_b.len() {
-                is_b.resize(u + 1, false);
+            if u == is_b.len() {
+                is_b.push(false);
             }
             let v = umi_mapping.get_or_insert(dest);
-            if v >= is_b.len() {
-                is_b.resize(v + 1, true);
+            if v == is_b.len() {
+                is_b.push(true);
             }
             (u.min(v), u.max(v), 1u8)
         })
