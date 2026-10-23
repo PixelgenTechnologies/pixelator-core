@@ -1242,9 +1242,7 @@ fn run_dataset_evaluation(
     let bip_loop_only_mb =
         (graph_1pc.get_num_nodes() * std::mem::size_of::<usize>()) as f64 / (1024.0 * 1024.0);
 
-    let mut base_components_opt: Option<Vec<usize>> = None;
-
-    if !only_4cycles {
+    let base_components_opt: Option<Vec<usize>> = if !only_4cycles {
         // 0. Baseline (random tie-breaking)
         let (p_base, _, l_base, c_base, ml_base, mt_base) =
             run_queue_flp_variant(&graph_1pc, QueueTieVariant::BaselineRandom, 42);
@@ -1374,7 +1372,7 @@ fn run_dataset_evaluation(
                 Some(&base_components),
             );
         }
-        base_components_opt = Some(base_components);
+        Some(base_components)
     } else {
         let (p_base, _, l_base, c_base, ml_base, mt_base) =
             run_queue_flp_variant(&graph_1pc, QueueTieVariant::BaselineRandom, 42);
@@ -1389,8 +1387,8 @@ fn run_dataset_evaluation(
             mt_base,
             None,
         );
-        base_components_opt = Some(base_components);
-    }
+        Some(base_components)
+    };
 
     // Approach 3: Direct 4-Cycle Merging (Union-Find over all 4-cycles in the bipartite graph)
     for (label, mode) in [
