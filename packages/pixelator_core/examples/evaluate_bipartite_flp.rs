@@ -27,6 +27,9 @@ use pixelator_core::fast_label_propagation::algorithm::{
     DEFAULT_BIPARTITE_FLP_MAX_ROUNDS, DEFAULT_BIPARTITE_FLP_MIN_CHANGED_FRACTION,
     alternating_bipartite_flp, clean_partitions,
 };
+use pixelator_core::four_cycle_compression::algorithm::{
+    FourCycleBridgeMode, four_cycle_compression,
+};
 use pixelator_core::leiden::algorithm::leiden;
 use pixelator_core::leiden::quality::modularity::Modularity;
 use pixelator_core::leiden::weighted_partitioned_graph::{
@@ -293,6 +296,24 @@ fn run_four_cycle_merge(
     let indptr = indptr_raw.as_slice().unwrap();
     let indices = adj.indices();
     let degrees = graph.get_degrees();
+
+    if matches!(mode, FourCycleMode::UnionFind4CyclesPlusStrictTreeFlp) {
+        let cleaned: FastNodePartitioning =
+            four_cycle_compression(graph, is_b, FourCycleBridgeMode::StrictMajorityOnly, 4);
+        let total_sec = t0.elapsed().as_secs_f64();
+        let total_mem = peak_delta_mb(base_mem);
+        let loop_mem = (n * std::mem::size_of::<usize>()) as f64 / (1024.0 * 1024.0);
+        return (cleaned, total_sec, loop_mem, total_mem);
+    }
+
+    if matches!(mode, FourCycleMode::UnionFind4CyclesPlusSameCoreEars) {
+        let cleaned: FastNodePartitioning =
+            four_cycle_compression(graph, is_b, FourCycleBridgeMode::MergeSameCoreBridges, 4);
+        let total_sec = t0.elapsed().as_secs_f64();
+        let total_mem = peak_delta_mb(base_mem);
+        let loop_mem = (n * std::mem::size_of::<usize>()) as f64 / (1024.0 * 1024.0);
+        return (cleaned, total_sec, loop_mem, total_mem);
+    }
 
     if matches!(mode, FourCycleMode::Local4CycleSeededBipartiteFlp) {
         // Local 4-Cycle Seeded Bipartite FLP:
