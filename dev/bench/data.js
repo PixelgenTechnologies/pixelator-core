@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793175498338,
+  "lastUpdate": 1793175971018,
   "repoUrl": "https://github.com/PixelgenTechnologies/pixelator-core",
   "entries": {
     "Native Community Detection Benchmark": [
@@ -3930,6 +3930,80 @@ window.BENCHMARK_DATA = {
           {
             "name": "bench_parquet_writing",
             "value": 0.5095000000000001,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "johan.dahlberg@pixelgen.com",
+            "name": "Johan Dahlberg",
+            "username": "johandahlberg"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "054345313411adc4e0e25643cd0a6591c7a2c31d",
+          "message": "Merge pull request #34 from PixelgenTechnologies/feature/umi-hash-mixing\n\nfix umi hashing.",
+          "timestamp": "2026-10-28T09:20:04+01:00",
+          "tree_id": "a9b883c5bc2aca24e429e23ff93fe9e880fd01fd",
+          "url": "https://github.com/PixelgenTechnologies/pixelator-core/commit/054345313411adc4e0e25643cd0a6591c7a2c31d"
+        },
+        "date": 1793175969159,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "bench_fast_label_propagation",
+            "value": 0.005896,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity",
+            "value": 0.02962,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity_medium",
+            "value": 13.64,
+            "unit": "s"
+          },
+          {
+            "name": "bench_connected_components",
+            "value": 0.1774,
+            "unit": "s"
+          },
+          {
+            "name": "mem_fast_label_propagation",
+            "value": 53.2532,
+            "unit": "MiB"
+          },
+          {
+            "name": "mem_graph_construction",
+            "value": 342.9413,
+            "unit": "MiB"
+          },
+          {
+            "name": "mem_leiden_modularity",
+            "value": 564.6706,
+            "unit": "MiB"
+          },
+          {
+            "name": "bench_create_graph_from_parquet",
+            "value": 1.271,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_reading",
+            "value": 0.4269,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_writing",
+            "value": 0.366,
             "unit": "s"
           }
         ]
