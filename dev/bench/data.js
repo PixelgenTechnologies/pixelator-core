@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792155324003,
+  "lastUpdate": 1793175498338,
   "repoUrl": "https://github.com/PixelgenTechnologies/pixelator-core",
   "entries": {
     "Native Community Detection Benchmark": [
@@ -3856,6 +3856,80 @@ window.BENCHMARK_DATA = {
           {
             "name": "bench_parquet_writing",
             "value": 1.23,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "johan.dahlberg@pixelgen.com",
+            "name": "Johan Dahlberg",
+            "username": "johandahlberg"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4467c7c71263d988bdf8b356a23f8fd1c28b8191",
+          "message": "Merge pull request #32 from PixelgenTechnologies/cursor/release-gil-in-pyfunctions-362d\n\nRelease Python GIL in pixelator_core #[pyfunction] entrypoints",
+          "timestamp": "2026-10-28T09:12:39+01:00",
+          "tree_id": "db21e3271174eb06a3484e69bac6b3a3e4962be6",
+          "url": "https://github.com/PixelgenTechnologies/pixelator-core/commit/4467c7c71263d988bdf8b356a23f8fd1c28b8191"
+        },
+        "date": 1793175496604,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "bench_fast_label_propagation",
+            "value": 0.006368,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity",
+            "value": 0.0297,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity_medium",
+            "value": 12.57,
+            "unit": "s"
+          },
+          {
+            "name": "bench_connected_components",
+            "value": 0.1789,
+            "unit": "s"
+          },
+          {
+            "name": "mem_fast_label_propagation",
+            "value": 53.2532,
+            "unit": "MiB"
+          },
+          {
+            "name": "mem_graph_construction",
+            "value": 342.9413,
+            "unit": "MiB"
+          },
+          {
+            "name": "mem_leiden_modularity",
+            "value": 564.6706,
+            "unit": "MiB"
+          },
+          {
+            "name": "bench_create_graph_from_parquet",
+            "value": 1.253,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_reading",
+            "value": 0.41050000000000003,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_writing",
+            "value": 0.5095000000000001,
             "unit": "s"
           }
         ]
