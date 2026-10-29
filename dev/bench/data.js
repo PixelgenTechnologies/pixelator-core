@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793260621142,
+  "lastUpdate": 1793264650078,
   "repoUrl": "https://github.com/PixelgenTechnologies/pixelator-core",
   "entries": {
     "Native Community Detection Benchmark": [
@@ -4083,6 +4083,130 @@ window.BENCHMARK_DATA = {
           {
             "name": "bench_parquet_writing",
             "value": 0.5081,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "adrien.coulier@pixelgen.com",
+            "name": "Adrien Coulier",
+            "username": "Aratz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ce11360c348e41928134d4c18e68361c26244d32",
+          "message": "Merge pull request #37 from PixelgenTechnologies/feature/graph-collapse\n\nAdd graph-collapse",
+          "timestamp": "2026-10-29T09:57:15+01:00",
+          "tree_id": "2f4ac405a29a8f5eaaf733ccd0cd98c58ed3f132",
+          "url": "https://github.com/PixelgenTechnologies/pixelator-core/commit/ce11360c348e41928134d4c18e68361c26244d32"
+        },
+        "date": 1793264647729,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "bench_fast_label_propagation",
+            "value": 0.0049640000000000005,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity",
+            "value": 0.02976,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity_medium",
+            "value": 12.91,
+            "unit": "s"
+          },
+          {
+            "name": "bench_connected_components",
+            "value": 0.1849,
+            "unit": "s"
+          },
+          {
+            "name": "bench_edgelist_paired",
+            "value": 0.41100000000000003,
+            "unit": "s"
+          },
+          {
+            "name": "bench_bounded_even_breadth_first_search/2",
+            "value": 0.10940000000000001,
+            "unit": "s"
+          },
+          {
+            "name": "bench_bounded_even_breadth_first_search/4",
+            "value": 1,
+            "unit": "s"
+          },
+          {
+            "name": "bench_bounded_even_breadth_first_search/6",
+            "value": 7.848,
+            "unit": "s"
+          },
+          {
+            "name": "bench_find_collapse_target/2",
+            "value": 0.14250000000000002,
+            "unit": "s"
+          },
+          {
+            "name": "bench_find_collapse_target/4",
+            "value": 1.011,
+            "unit": "s"
+          },
+          {
+            "name": "bench_find_collapse_target/6",
+            "value": 7.568,
+            "unit": "s"
+          },
+          {
+            "name": "bench_graph_collapse/2",
+            "value": 0.08306000000000001,
+            "unit": "s"
+          },
+          {
+            "name": "bench_graph_collapse/4",
+            "value": 0.6205,
+            "unit": "s"
+          },
+          {
+            "name": "bench_graph_collapse/6",
+            "value": 3.846,
+            "unit": "s"
+          },
+          {
+            "name": "mem_fast_label_propagation",
+            "value": 53.2532,
+            "unit": "MiB"
+          },
+          {
+            "name": "mem_graph_construction",
+            "value": 342.9413,
+            "unit": "MiB"
+          },
+          {
+            "name": "mem_leiden_modularity",
+            "value": 564.6706,
+            "unit": "MiB"
+          },
+          {
+            "name": "bench_create_graph_from_parquet",
+            "value": 1.224,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_reading",
+            "value": 0.34850000000000003,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_writing",
+            "value": 1.599,
             "unit": "s"
           }
         ]
