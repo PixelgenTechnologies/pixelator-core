@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["constants","graph","io","linalg","node_indexing","node_partitioning","types","utils"]};
+window.SIDEBAR_ITEMS = {"mod":["assay","constants","distances","graph","io","linalg","node_indexing","node_partitioning","panel","types","utils"]};

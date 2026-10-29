@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["MarkerMatch"],"struct":["Panel","PanelMarker","PanelSearcher"]};

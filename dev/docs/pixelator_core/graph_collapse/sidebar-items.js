@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["find_collapse_target","graph_collapse"],"struct":["CollapseStats"],"trait":["GraphCollapseExt"]};

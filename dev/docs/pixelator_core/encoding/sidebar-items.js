@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["decode_dna_2bit","encode_dna_2bit","encode_dna_2bit_rc"]};

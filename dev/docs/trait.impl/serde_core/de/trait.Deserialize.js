@@ -1,0 +1,9 @@
+(function() {
+    const implementors = Object.fromEntries([["pixelator_core",[["impl&lt;'de&gt; <a class=\"trait\" href=\"https://docs.rs/serde_core/1.0.229/serde_core/de/trait.Deserialize.html\" title=\"trait serde_core::de::Deserialize\">Deserialize</a>&lt;'de&gt; for <a class=\"struct\" href=\"pixelator_core/common/assay/struct.Assay.html\" title=\"struct pixelator_core::common::assay::Assay\">Assay</a>",0],["impl&lt;'de&gt; <a class=\"trait\" href=\"https://docs.rs/serde_core/1.0.229/serde_core/de/trait.Deserialize.html\" title=\"trait serde_core::de::Deserialize\">Deserialize</a>&lt;'de&gt; for <a class=\"struct\" href=\"pixelator_core/common/assay/struct.Region.html\" title=\"struct pixelator_core::common::assay::Region\">Region</a>",0],["impl&lt;'de&gt; <a class=\"trait\" href=\"https://docs.rs/serde_core/1.0.229/serde_core/de/trait.Deserialize.html\" title=\"trait serde_core::de::Deserialize\">Deserialize</a>&lt;'de&gt; for <a class=\"enum\" href=\"pixelator_core/common/assay/enum.RegionType.html\" title=\"enum pixelator_core::common::assay::RegionType\">RegionType</a>",0],["impl&lt;'de&gt; <a class=\"trait\" href=\"https://docs.rs/serde_core/1.0.229/serde_core/de/trait.Deserialize.html\" title=\"trait serde_core::de::Deserialize\">Deserialize</a>&lt;'de&gt; for <a class=\"enum\" href=\"pixelator_core/common/assay/enum.SequenceType.html\" title=\"enum pixelator_core::common::assay::SequenceType\">SequenceType</a>",0]]]]);
+    if (window.register_implementors) {
+        window.register_implementors(implementors);
+    } else {
+        window.pending_implementors = implementors;
+    }
+})()
+//{"start":59,"fragment_lengths":[1391]}
