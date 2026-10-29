@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793269280391,
+  "lastUpdate": 1793277064953,
   "repoUrl": "https://github.com/PixelgenTechnologies/pixelator-core",
   "entries": {
     "Native Community Detection Benchmark": [
@@ -4703,6 +4703,130 @@ window.BENCHMARK_DATA = {
           {
             "name": "bench_parquet_writing",
             "value": 0.46030000000000004,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "adrien.coulier@pixelgen.com",
+            "name": "Adrien Coulier",
+            "username": "Aratz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "80bb3b8fd74ff51af1a50f38227761cba64ff9d9",
+          "message": "Merge pull request #43 from PixelgenTechnologies/fix/debug_msg_graph\n\nFix debug message panic on graphs with fewer than 5 partitions",
+          "timestamp": "2026-10-29T13:23:36+01:00",
+          "tree_id": "8ed886586ad047c60a46b99580e15a8d742baa0e",
+          "url": "https://github.com/PixelgenTechnologies/pixelator-core/commit/80bb3b8fd74ff51af1a50f38227761cba64ff9d9"
+        },
+        "date": 1793277063739,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "bench_fast_label_propagation",
+            "value": 0.006208,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity",
+            "value": 0.03172,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity_medium",
+            "value": 12.99,
+            "unit": "s"
+          },
+          {
+            "name": "bench_connected_components",
+            "value": 0.178,
+            "unit": "s"
+          },
+          {
+            "name": "bench_edgelist_paired",
+            "value": 0.4914,
+            "unit": "s"
+          },
+          {
+            "name": "bench_bounded_even_breadth_first_search/2",
+            "value": 0.1081,
+            "unit": "s"
+          },
+          {
+            "name": "bench_bounded_even_breadth_first_search/4",
+            "value": 1.144,
+            "unit": "s"
+          },
+          {
+            "name": "bench_bounded_even_breadth_first_search/6",
+            "value": 8.734,
+            "unit": "s"
+          },
+          {
+            "name": "bench_find_collapse_target/2",
+            "value": 0.1419,
+            "unit": "s"
+          },
+          {
+            "name": "bench_find_collapse_target/4",
+            "value": 1.112,
+            "unit": "s"
+          },
+          {
+            "name": "bench_find_collapse_target/6",
+            "value": 8.129,
+            "unit": "s"
+          },
+          {
+            "name": "bench_graph_collapse/2",
+            "value": 0.08217,
+            "unit": "s"
+          },
+          {
+            "name": "bench_graph_collapse/4",
+            "value": 0.5362,
+            "unit": "s"
+          },
+          {
+            "name": "bench_graph_collapse/6",
+            "value": 3.482,
+            "unit": "s"
+          },
+          {
+            "name": "mem_fast_label_propagation",
+            "value": 53.2532,
+            "unit": "MiB"
+          },
+          {
+            "name": "mem_graph_construction",
+            "value": 342.9413,
+            "unit": "MiB"
+          },
+          {
+            "name": "mem_leiden_modularity",
+            "value": 564.6706,
+            "unit": "MiB"
+          },
+          {
+            "name": "bench_create_graph_from_parquet",
+            "value": 1.242,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_reading",
+            "value": 0.4192,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_writing",
+            "value": 0.514,
             "unit": "s"
           }
         ]
