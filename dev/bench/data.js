@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793277064953,
+  "lastUpdate": 1793279228718,
   "repoUrl": "https://github.com/PixelgenTechnologies/pixelator-core",
   "entries": {
     "Native Community Detection Benchmark": [
@@ -4827,6 +4827,130 @@ window.BENCHMARK_DATA = {
           {
             "name": "bench_parquet_writing",
             "value": 0.514,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "adrien.coulier@pixelgen.com",
+            "name": "Adrien Coulier",
+            "username": "Aratz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7db7c381fc3416c3496b245e3b41c9ad9f04d93e",
+          "message": "Merge pull request #45 from PixelgenTechnologies/release/1.0.2\n\nPrepare 1.0.2 release",
+          "timestamp": "2026-10-29T13:59:12+01:00",
+          "tree_id": "2b0a4a41df4637d84dc5c69ff9d2dca5c2a20478",
+          "url": "https://github.com/PixelgenTechnologies/pixelator-core/commit/7db7c381fc3416c3496b245e3b41c9ad9f04d93e"
+        },
+        "date": 1793279227739,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "bench_fast_label_propagation",
+            "value": 0.006282,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity",
+            "value": 0.02614,
+            "unit": "s"
+          },
+          {
+            "name": "bench_leiden_modularity_medium",
+            "value": 14.05,
+            "unit": "s"
+          },
+          {
+            "name": "bench_connected_components",
+            "value": 0.1857,
+            "unit": "s"
+          },
+          {
+            "name": "bench_edgelist_paired",
+            "value": 0.4977,
+            "unit": "s"
+          },
+          {
+            "name": "bench_bounded_even_breadth_first_search/2",
+            "value": 0.1081,
+            "unit": "s"
+          },
+          {
+            "name": "bench_bounded_even_breadth_first_search/4",
+            "value": 1.279,
+            "unit": "s"
+          },
+          {
+            "name": "bench_bounded_even_breadth_first_search/6",
+            "value": 10.19,
+            "unit": "s"
+          },
+          {
+            "name": "bench_find_collapse_target/2",
+            "value": 0.15,
+            "unit": "s"
+          },
+          {
+            "name": "bench_find_collapse_target/4",
+            "value": 1.261,
+            "unit": "s"
+          },
+          {
+            "name": "bench_find_collapse_target/6",
+            "value": 9.273,
+            "unit": "s"
+          },
+          {
+            "name": "bench_graph_collapse/2",
+            "value": 0.08002,
+            "unit": "s"
+          },
+          {
+            "name": "bench_graph_collapse/4",
+            "value": 0.5353,
+            "unit": "s"
+          },
+          {
+            "name": "bench_graph_collapse/6",
+            "value": 4.246,
+            "unit": "s"
+          },
+          {
+            "name": "mem_fast_label_propagation",
+            "value": 53.2532,
+            "unit": "MiB"
+          },
+          {
+            "name": "mem_graph_construction",
+            "value": 342.9413,
+            "unit": "MiB"
+          },
+          {
+            "name": "mem_leiden_modularity",
+            "value": 564.6706,
+            "unit": "MiB"
+          },
+          {
+            "name": "bench_create_graph_from_parquet",
+            "value": 1.293,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_reading",
+            "value": 0.4283,
+            "unit": "s"
+          },
+          {
+            "name": "bench_parquet_writing",
+            "value": 0.5548,
             "unit": "s"
           }
         ]
