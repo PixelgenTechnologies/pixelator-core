@@ -10,37 +10,52 @@ use crate::common::Panel;
 
 #[derive(Clone)]
 pub struct RowBuffer {
-    /// Marker indices for `pid-1`; each entry is a key into `dict` and is
-    /// emitted as a dictionary-encoded (VARCHAR) `marker_1` column.
+    /// Marker indices for `pid-1`; each entry is a key into `marker_dict` and is
+    /// emitted as a dictionary-encoded (VARCHAR) `marker_1` column, and into
+    /// `seq1_dict` for the `marker_sequence_1` column.
     buf_marker_idx1: Vec<i32>,
-    /// Marker indices for `pid-2`; each entry is a key into `dict` and is
-    /// emitted as a dictionary-encoded (VARCHAR) `marker_2` column.
+    /// Marker indices for `pid-2`; each entry is a key into `marker_dict` and is
+    /// emitted as a dictionary-encoded (VARCHAR) `marker_2` column, and into
+    /// `seq2_dict` for the `marker_sequence_2` column.
     buf_marker_idx2: Vec<i32>,
     buf_umi1: Vec<u64>,
     buf_umi2: Vec<u64>,
     /// Shared dictionary values: the panel's marker ids in file order, indexed
     /// by the `buf_marker_idx*` keys. Built once in `new` and reused (as a cheap
     /// `Arc` clone) for every flushed batch.
-    dict: ArrayRef,
+    marker_dict: ArrayRef,
+    /// Likewise the panel's `sequence_1` barcodes, indexed by `buf_marker_idx1`.
+    seq1_dict: ArrayRef,
+    /// Likewise the panel's `sequence_2` barcodes, indexed by `buf_marker_idx2`.
+    seq2_dict: ArrayRef,
 }
 
 impl RowBuffer {
     /// Creates a buffer pre-sized to `capacity` rows.
     ///
-    /// The `panel` is only borrowed to snapshot its marker ids into the shared
-    /// dictionary values array. The marker indices later pushed via
+    /// The `panel` is only borrowed to snapshot its marker ids and barcode
+    /// sequences into the shared dictionary values arrays. The marker indices later pushed via
     /// [`push`](Self::push) must be positions in this same panel's `markers`
     /// (which is what [`Panel::marker_index_seq1`] and friends return).
     pub fn new(capacity: usize, panel: &Panel) -> Self {
-        let dict: ArrayRef = Arc::new(StringArray::from_iter_values(
+        let marker_dict: ArrayRef = Arc::new(StringArray::from_iter_values(
             panel.markers().iter().map(|m| m.marker_id.as_str()),
         ));
+        let seq1_dict: ArrayRef = Arc::new(StringArray::from_iter_values(
+            panel.markers().iter().map(|m| m.sequence_1.as_str()),
+        ));
+        let seq2_dict: ArrayRef = Arc::new(StringArray::from_iter_values(
+            panel.markers().iter().map(|m| m.sequence_2.as_str()),
+        ));
+
         Self {
             buf_marker_idx1: Vec::with_capacity(capacity),
             buf_marker_idx2: Vec::with_capacity(capacity),
             buf_umi1: Vec::with_capacity(capacity),
             buf_umi2: Vec::with_capacity(capacity),
-            dict,
+            marker_dict,
+            seq1_dict,
+            seq2_dict,
         }
     }
 
@@ -73,40 +88,54 @@ impl RowBuffer {
             ),
             Field::new("umi1", DataType::UInt64, false),
             Field::new("umi2", DataType::UInt64, false),
+            Field::new(
+                "marker_sequence_1",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                false,
+            ),
+            Field::new(
+                "marker_sequence_2",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                false,
+            ),
         ]))
     }
 
     /// Move the buffered columns into an Arrow `RecordBatch` and reset the buffers, preserving each
     /// vector's previous capacity for the next batch.
     ///
-    /// All four columns hand their `Vec`s to Arrow zero-copy: `Buffer::from_vec` adopts each
-    /// vector's existing allocation rather than copying elements, so both the `i32` marker keys and
-    /// the `u64` UMIs are transferred without a per-row copy. The marker columns are additionally
-    /// built as `DictionaryArray`s that share a single `Arc`'d dictionary of marker ids
-    /// (`self.dict.clone()` is just a refcount bump)
+    /// The `Vec`s are handed to Arrow zero-copy: `Buffer::from_vec` adopts each vector's existing
+    /// allocation rather than copying elements, so both the `i32` marker keys and the `u64` UMIs
+    /// are transferred without a per-row copy.
     ///
-    /// Parquet stores the marker columns as RLE_DICTIONARY-encoded VARCHAR. The reset leaves
+    /// The four dictionary columns are built as `DictionaryArray`s over `Arc`'d dictionaries
+    /// created once in `new`: the marker ids, and the panel's `sequence_1` and `sequence_2`
+    /// barcodes. Each side's `Int32Array` of keys is built once and shared between its marker
+    /// column and its sequence column, as the sequence is looked up by the same marker index.
+    /// Cloning a dictionary or a key array is just a refcount bump.
+    ///
+    /// Parquet stores the dictionary columns as RLE_DICTIONARY-encoded VARCHAR. The reset leaves
     /// freshly allocated buffers, pre-sized to avoid re-growing while filling the next batch.
     pub fn flush(&mut self) -> Result<RecordBatch, ArrowError> {
-        let marker_idx1 = take_buffer(&mut self.buf_marker_idx1);
-        let marker_idx2 = take_buffer(&mut self.buf_marker_idx2);
-        let umi1 = take_buffer(&mut self.buf_umi1);
-        let umi2 = take_buffer(&mut self.buf_umi2);
+        let keys1 = Int32Array::from(take_buffer(&mut self.buf_marker_idx1));
+        let keys2 = Int32Array::from(take_buffer(&mut self.buf_marker_idx2));
+        let umi1 = UInt64Array::from(take_buffer(&mut self.buf_umi1));
+        let umi2 = UInt64Array::from(take_buffer(&mut self.buf_umi2));
 
-        let marker1 = DictionaryArray::<Int32Type>::try_new(
-            Int32Array::from(marker_idx1),
-            self.dict.clone(),
-        )?;
-        let marker2 = DictionaryArray::<Int32Type>::try_new(
-            Int32Array::from(marker_idx2),
-            self.dict.clone(),
-        )?;
+        let marker1 =
+            DictionaryArray::<Int32Type>::try_new(keys1.clone(), self.marker_dict.clone())?;
+        let marker2 =
+            DictionaryArray::<Int32Type>::try_new(keys2.clone(), self.marker_dict.clone())?;
+        let seq1 = DictionaryArray::<Int32Type>::try_new(keys1, self.seq1_dict.clone())?;
+        let seq2 = DictionaryArray::<Int32Type>::try_new(keys2, self.seq2_dict.clone())?;
 
         let columns: Vec<ArrayRef> = vec![
             Arc::new(marker1),
             Arc::new(marker2),
-            Arc::new(UInt64Array::from(umi1)),
-            Arc::new(UInt64Array::from(umi2)),
+            Arc::new(umi1),
+            Arc::new(umi2),
+            Arc::new(seq1),
+            Arc::new(seq2),
         ];
 
         RecordBatch::try_new(Self::schema(), columns)
@@ -122,16 +151,36 @@ fn take_buffer<T>(buf: &mut Vec<T>) -> Vec<T> {
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::{Array, ArrayAccessor};
+
     use super::*;
+    use crate::common::PanelMarker;
     use crate::test_fixtures::proxiome_v2_panel;
 
-    /// Builds the expected `DictionaryArray` for a marker column from a set of
-    /// keys and the panel used to construct the buffer.
-    fn expected_marker_column(keys: Vec<i32>, panel: &Panel) -> DictionaryArray<Int32Type> {
+    /// Builds the expected `DictionaryArray` for a column from a set of keys and
+    /// the panel used to construct the buffer; `value` picks which marker field
+    /// (id or one of the sequences) the dictionary holds.
+    fn expected_dict_column(
+        keys: Vec<i32>,
+        panel: &Panel,
+        value: fn(&PanelMarker) -> &str,
+    ) -> DictionaryArray<Int32Type> {
         let values: ArrayRef = Arc::new(StringArray::from_iter_values(
-            panel.markers().iter().map(|m| m.marker_id.as_str()),
+            panel.markers().iter().map(value),
         ));
         DictionaryArray::<Int32Type>::try_new(Int32Array::from(keys), values).unwrap()
+    }
+
+    /// Resolves a dictionary column back to its per-row strings.
+    fn column_strings(batch: &RecordBatch, name: &str) -> Vec<String> {
+        let column = batch.column_by_name(name).expect("column present");
+        let dict = column
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .expect("dictionary-encoded column")
+            .downcast_dict::<StringArray>()
+            .expect("string dictionary values");
+        (0..dict.len()).map(|i| dict.value(i).to_string()).collect()
     }
 
     #[test]
@@ -176,15 +225,62 @@ mod tests {
         let expected = RecordBatch::try_new(
             RowBuffer::schema(),
             vec![
-                Arc::new(expected_marker_column(vec![0, 1], &panel)) as ArrayRef,
-                Arc::new(expected_marker_column(vec![2, 3], &panel)),
+                Arc::new(expected_dict_column(vec![0, 1], &panel, |m| {
+                    m.marker_id.as_str()
+                })) as ArrayRef,
+                Arc::new(expected_dict_column(vec![2, 3], &panel, |m| {
+                    m.marker_id.as_str()
+                })),
                 Arc::new(UInt64Array::from(vec![11u64, 12])),
                 Arc::new(UInt64Array::from(vec![21u64, 22])),
+                Arc::new(expected_dict_column(vec![0, 1], &panel, |m| {
+                    m.sequence_1.as_str()
+                })),
+                Arc::new(expected_dict_column(vec![2, 3], &panel, |m| {
+                    m.sequence_2.as_str()
+                })),
             ],
         )
         .unwrap();
 
         assert_eq!(batch, expected);
+    }
+
+    /// Each sequence column resolves to the panel barcode of the marker in the
+    /// matching marker column: `sequence_1` for side 1, `sequence_2` for side 2.
+    #[test]
+    fn flush_sequences_match_the_panel_barcodes_of_their_markers() {
+        let panel = proxiome_v2_panel();
+        let mut rb = RowBuffer::new(4, &panel);
+        let rows = [(0, 2), (3, 1), (1, 1)];
+        for (idx1, idx2) in rows {
+            rb.push(idx1, idx2, 0, 0);
+        }
+
+        let batch = rb.flush().expect("flush");
+
+        let markers = panel.markers();
+        let expect = |idx: fn(&(i32, i32)) -> i32, field: fn(&PanelMarker) -> &str| {
+            rows.iter()
+                .map(|row| field(&markers[idx(row) as usize]).to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            column_strings(&batch, "marker_1"),
+            expect(|r| r.0, |m| m.marker_id.as_str())
+        );
+        assert_eq!(
+            column_strings(&batch, "marker_2"),
+            expect(|r| r.1, |m| m.marker_id.as_str())
+        );
+        assert_eq!(
+            column_strings(&batch, "marker_sequence_1"),
+            expect(|r| r.0, |m| m.sequence_1.as_str())
+        );
+        assert_eq!(
+            column_strings(&batch, "marker_sequence_2"),
+            expect(|r| r.1, |m| m.sequence_2.as_str())
+        );
     }
 
     #[test]
@@ -228,7 +324,7 @@ mod tests {
         let mut rb = RowBuffer::new(0, &proxiome_v2_panel());
         let batch = rb.flush().unwrap();
         assert_eq!(batch.num_rows(), 0);
-        assert_eq!(batch.num_columns(), 4);
+        assert_eq!(batch.num_columns(), 6);
         assert_eq!(batch.schema(), RowBuffer::schema());
     }
 
@@ -236,14 +332,16 @@ mod tests {
     fn schema_matches_output_contract() {
         let schema = RowBuffer::schema();
         let fields = schema.fields();
-        assert_eq!(fields.len(), 4);
+        assert_eq!(fields.len(), 6);
 
         let dict_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
         let expected = [
             ("marker_1", dict_type.clone()),
-            ("marker_2", dict_type),
+            ("marker_2", dict_type.clone()),
             ("umi1", DataType::UInt64),
             ("umi2", DataType::UInt64),
+            ("marker_sequence_1", dict_type.clone()),
+            ("marker_sequence_2", dict_type),
         ];
         for (field, (name, dtype)) in fields.iter().zip(expected) {
             assert_eq!(field.name(), name);

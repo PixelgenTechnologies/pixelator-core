@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Edgelist Parquet gains `marker_sequence_1` and `marker_sequence_2` columns.
+
 ## [1.0.2] - 2026-10-29
 
 ### Changed
