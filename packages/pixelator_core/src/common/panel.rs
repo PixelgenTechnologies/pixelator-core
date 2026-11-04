@@ -36,7 +36,7 @@ pub struct Panel {
 
 /// A single marker loaded from a panel: its identifier and its two barcode
 /// sequences, stored exactly as they appear in the panel file.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct PanelMarker {
     /// Human-readable marker identifier (e.g. `CD11b`).
     pub marker_id: String,
@@ -44,21 +44,6 @@ pub struct PanelMarker {
     pub sequence_1: String,
     /// Second barcode sequence for the marker.
     pub sequence_2: String,
-}
-
-/// A single deserialized row of a panel CSV.
-///
-/// Only the fields consumed by [`Panel`] are declared here; any other columns
-/// present in the file (for example `control`, `full_name`, `alt_id`,
-/// `uniprot_id`) are matched by header name and ignored.
-#[derive(Debug, Deserialize)]
-struct Record {
-    /// Human-readable marker identifier (e.g. `CD11b`).
-    marker_id: String,
-    /// First barcode sequence for the marker.
-    sequence_1: String,
-    /// Second barcode sequence for the marker.
-    sequence_2: String,
 }
 
 impl Panel {
@@ -97,12 +82,7 @@ impl Panel {
             while row.len() < headers.len() {
                 row.push_field("");
             }
-            let record: Record = row.deserialize(Some(&headers))?;
-            markers.push(PanelMarker {
-                marker_id: record.marker_id,
-                sequence_1: record.sequence_1,
-                sequence_2: record.sequence_2,
-            });
+            markers.push(row.deserialize(Some(&headers))?);
         }
 
         Self::from_markers(markers)
@@ -383,7 +363,7 @@ mod tests {
 
     /// Build a small panel CSV that mirrors the real file: a `#`-commented YAML
     /// header block followed by the full column set (only marker_id/sequence_1/
-    /// sequence_2 are consumed by `Record`).
+    /// sequence_2 are consumed by `PanelMarker`).
     fn fixture_csv() -> String {
         let mut csv = String::from(
             "# ---\n\
