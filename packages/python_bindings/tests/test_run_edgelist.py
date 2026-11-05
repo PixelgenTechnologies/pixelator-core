@@ -12,6 +12,15 @@ import pixelator_core
 
 N_READS = 200
 
+EDGELIST_COLUMNS = [
+    "marker_1",
+    "marker_2",
+    "umi1",
+    "umi2",
+    "marker_sequence_1",
+    "marker_sequence_2",
+]
+
 # Every reason the extractor can report, whether or not it fired.
 DROP_REASONS = {
     "has_n",
@@ -66,7 +75,7 @@ def test_paired_end_writes_one_row_per_read(tmp_path, amplicons, assay, panel):
     stats = run_paired(tmp_path, amplicons, assay, panel, n_threads=2)
 
     table = pq.read_table(tmp_path / "sample.parquet")
-    assert table.column_names == ["marker_1", "marker_2", "umi1", "umi2"]
+    assert table.column_names == EDGELIST_COLUMNS
     assert table.num_rows == N_READS
 
     assert stats["input_reads"] == N_READS
@@ -76,6 +85,22 @@ def test_paired_end_writes_one_row_per_read(tmp_path, amplicons, assay, panel):
     assert sum(stats["reads_per_marker_1"].values()) == N_READS
     assert sum(stats["reads_per_marker_2"].values()) == N_READS
     assert set(stats["q30_statistics"]) == {"total", "pid1", "umi1", "pid2", "umi2"}
+
+
+def test_edgelist_stores_the_panel_sequences_of_each_marker(
+    tmp_path, amplicons, assay, panel
+):
+    run_paired(tmp_path, amplicons, assay, panel, n_threads=2)
+
+    table = pq.read_table(tmp_path / "sample.parquet")
+    by_id = {row["marker_id"]: row for row in panel.rows}
+    for marker_column, sequence_column, panel_column in (
+        ("marker_1", "marker_sequence_1", "sequence_1"),
+        ("marker_2", "marker_sequence_2", "sequence_2"),
+    ):
+        markers = table.column(marker_column).to_pylist()
+        sequences = table.column(sequence_column).to_pylist()
+        assert sequences == [by_id[marker][panel_column] for marker in markers]
 
 
 def test_single_forward_writes_one_row_per_read(tmp_path, amplicons, assay, panel):
@@ -217,7 +242,7 @@ def test_all_reads_dropped_writes_an_empty_edgelist(tmp_path, amplicons, assay, 
     assert stats["dropped_by"]["has_n"] == N_READS
     table = pq.read_table(tmp_path / "sample.parquet")
     assert table.num_rows == 0
-    assert table.column_names == ["marker_1", "marker_2", "umi1", "umi2"]
+    assert table.column_names == EDGELIST_COLUMNS
 
 
 def test_requires_at_least_one_read_file(tmp_path, assay, panel):

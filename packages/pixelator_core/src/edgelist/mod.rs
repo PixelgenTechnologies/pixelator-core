@@ -189,9 +189,10 @@ mod tests {
     use arrow::array::{Array, ArrayAccessor, DictionaryArray, StringArray};
     use arrow::datatypes::Int32Type;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-    use rustc_hash::FxHashMap as HashMap;
+    use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
     use super::*;
+    use crate::common::PanelMarker;
     use crate::test_fixtures::{
         OwnedRecord, ReadMixConfig, generate_single_reads, proxiome_v2_assay,
         proxiome_v2_marker_sequences, proxiome_v2_panel, proxiome_v2_read_pairs,
@@ -216,6 +217,15 @@ mod tests {
 
     const N: usize = 1000;
 
+    const EDGELIST_COLUMNS: [&str; 6] = [
+        "marker_1",
+        "marker_2",
+        "umi1",
+        "umi2",
+        "marker_sequence_1",
+        "marker_sequence_2",
+    ];
+
     /// A fully valid mix (no N-drops, no unknown pids) with reads long enough to
     /// span the whole amplicon, so every generated read produces exactly one row.
     fn valid_mix() -> ReadMixConfig {
@@ -226,17 +236,20 @@ mod tests {
         }
     }
 
-    /// Runs `edgelist` on `input` and returns the run's stats together with the
-    /// Parquet's column names, the number of rows written and the rows per
-    /// marker id in each of the `marker_1` / `marker_2` columns.
-    fn run_edgelist_to_parquet(
-        input: FastqInput,
-    ) -> (
-        EdgelistStats,
-        Vec<String>,
-        usize,
-        [HashMap<String, usize>; 2],
-    ) {
+    /// What [`run_edgelist_to_parquet`] read back from the edgelist Parquet.
+    struct ParquetContents {
+        stats: EdgelistStats,
+        field_names: Vec<String>,
+        total_rows: usize,
+        /// Rows per marker id in each of the `marker_1` / `marker_2` columns.
+        written: [HashMap<String, usize>; 2],
+        /// Distinct sequences stored alongside each marker id, in each of the
+        /// `marker_sequence_1` / `marker_sequence_2` columns.
+        sequences: [HashMap<String, HashSet<String>>; 2],
+    }
+
+    /// Runs `edgelist` on `input` and reads the resulting Parquet back.
+    fn run_edgelist_to_parquet(input: FastqInput) -> ParquetContents {
         let tmpdir = tempfile::tempdir().expect("create tempdir");
         let sample_name = "sample".to_string();
 
@@ -265,11 +278,16 @@ mod tests {
             .collect();
 
         let mut written: [HashMap<String, usize>; 2] = Default::default();
+        let mut sequences: [HashMap<String, HashSet<String>>; 2] = Default::default();
         let mut total_rows = 0;
         for batch in builder.build().expect("build parquet reader") {
             let batch = batch.expect("read record batch");
             total_rows += batch.num_rows();
-            for (side, column) in ["marker_1", "marker_2"].into_iter().enumerate() {
+            let sides = [
+                ("marker_1", "marker_sequence_1"),
+                ("marker_2", "marker_sequence_2"),
+            ];
+            for (side, (column, sequence_column)) in sides.into_iter().enumerate() {
                 let dict = batch
                     .column_by_name(column)
                     .expect("marker column")
@@ -281,14 +299,59 @@ mod tests {
                     .as_any()
                     .downcast_ref::<StringArray>()
                     .expect("string dictionary values");
-                for key in dict.keys().iter() {
+                let sequence_dict = batch
+                    .column_by_name(sequence_column)
+                    .expect("sequence column")
+                    .as_any()
+                    .downcast_ref::<DictionaryArray<Int32Type>>()
+                    .expect("dictionary-encoded sequence column")
+                    .downcast_dict::<StringArray>()
+                    .expect("string dictionary values");
+                for (row, key) in dict.keys().iter().enumerate() {
                     let id = ids.value(key.expect("non-null key") as usize);
                     *written[side].entry(id.to_string()).or_insert(0) += 1;
+                    sequences[side]
+                        .entry(id.to_string())
+                        .or_default()
+                        .insert(sequence_dict.value(row).to_string());
                 }
             }
         }
 
-        (stats, field_names, total_rows, written)
+        ParquetContents {
+            stats,
+            field_names,
+            total_rows,
+            written,
+            sequences,
+        }
+    }
+
+    /// Asserts every marker id was stored with exactly its panel barcode:
+    /// `sequence_1` in `marker_sequence_1`, `sequence_2` in `marker_sequence_2`.
+    fn assert_sequences_match_panel(sequences: &[HashMap<String, HashSet<String>>; 2]) {
+        let panel = proxiome_v2_panel();
+        let markers: HashMap<&str, &PanelMarker> = panel
+            .markers()
+            .iter()
+            .map(|m| (m.marker_id.as_str(), m))
+            .collect();
+        for (side, stored) in sequences.iter().enumerate() {
+            for (id, stored_sequences) in stored {
+                let marker = markers[id.as_str()];
+                let expected = if side == 0 {
+                    &marker.sequence_1
+                } else {
+                    &marker.sequence_2
+                };
+                assert_eq!(
+                    stored_sequences,
+                    &HashSet::from_iter([expected.clone()]),
+                    "marker_sequence_{} for {id}",
+                    side + 1
+                );
+            }
+        }
     }
 
     fn assert_marker_tallies_match_parquet(
@@ -318,9 +381,16 @@ mod tests {
     /// with exactly `expected_rows` rows (one per valid read), and that the
     /// returned stats describe that same run.
     fn assert_writes_one_row_per_read(input: FastqInput, expected_rows: usize) {
-        let (stats, field_names, total_rows, written) = run_edgelist_to_parquet(input);
-        assert_eq!(field_names, ["marker_1", "marker_2", "umi1", "umi2"]);
+        let ParquetContents {
+            stats,
+            field_names,
+            total_rows,
+            written,
+            sequences,
+        } = run_edgelist_to_parquet(input);
+        assert_eq!(field_names, EDGELIST_COLUMNS);
         assert_marker_tallies_match_parquet(&stats, &written);
+        assert_sequences_match_panel(&sequences);
 
         assert_eq!(
             total_rows, expected_rows,
@@ -411,9 +481,16 @@ mod tests {
             ))),
         };
 
-        let (stats, field_names, total_rows, written) = run_edgelist_to_parquet(input);
-        assert_eq!(field_names, ["marker_1", "marker_2", "umi1", "umi2"]);
+        let ParquetContents {
+            stats,
+            field_names,
+            total_rows,
+            written,
+            sequences,
+        } = run_edgelist_to_parquet(input);
+        assert_eq!(field_names, EDGELIST_COLUMNS);
         assert_marker_tallies_match_parquet(&stats, &written);
+        assert_sequences_match_panel(&sequences);
 
         assert_eq!(stats.total_reads(), N, "every read is counted");
         assert_eq!(stats.total_kept_reads(), total_rows);
