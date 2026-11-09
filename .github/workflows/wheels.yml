@@ -3,55 +3,52 @@ name: wheels
 on:
   release:
     types: [published]
-  # Release PRs only build the wheels, to catch packaging failures before the
-  # release is published. Uploading is limited to the `release` event.
+  # Release PRs (opened by release-please) only build the wheels, to catch
+  # packaging failures before the release is published. Uploading is limited
+  # to the `release` event. Only release PRs change the manifest.
   pull_request:
-    branches: [main]
+    branches: [dev]
+    paths: [.release-please-manifest.json]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   verify-release-version:
-    name: verify release tag matches package versions
-    if: ${{ github.event_name == 'release' || github.head_ref == 'dev' }}
+    name: verify package version
     runs-on: ubuntu-latest
+    env:
+      EVENT_NAME: ${{ github.event_name }}
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-      - name: Check release tag matches workspace version (single source of truth)
-        if: github.event_name == 'release'
-        env:
-          GITHUB_REF_NAME: ${{ github.ref_name }}
+      # Stop before building if the wheels would get the wrong version.
+      #
+      # Why: the wheel version is read from Cargo.toml, not from the git tag. If
+      # release-please fails to bump Cargo.toml (it only logs a warning), a v1.1.0
+      # release would publish 1.0.2 wheels, and PyPI does not allow re-uploads.
+      #
+      # What: compare the version in Cargo.toml with
+      #   - on a release: the tag, without the "v" (v1.1.0 -> 1.1.0)
+      #   - on a release PR: the version in .release-please-manifest.json
+      - name: Check Cargo.toml version
         run: |
-          python << 'EOF'
-          import os
-          import tomllib
-          from pathlib import Path
-
-          ref_name = os.environ["GITHUB_REF_NAME"]
-          tag_ver = ref_name.removeprefix("v") if ref_name.startswith("v") else ref_name
-
-          with open("Cargo.toml", "rb") as f:
-              workspace_ver = tomllib.load(f).get("workspace", {}).get("package", {}).get("version")
-          if not workspace_ver:
-              raise SystemExit("Cargo.toml missing [workspace.package].version")
-
-          if workspace_ver != tag_ver:
-              raise SystemExit(
-                  f"Cargo.toml has version {workspace_ver!r}, expected {tag_ver!r} from tag {ref_name!r}"
-              )
-
-          print(f"OK: tag {ref_name!r} matches workspace version {workspace_ver!r}")
-          EOF
+          set -euo pipefail
+          actual=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+          if [ "${EVENT_NAME}" = "release" ]; then
+            expected="${GITHUB_REF_NAME#v}"
+          else
+            expected=$(python3 -c 'import json; print(json.load(open(".release-please-manifest.json"))["."])')
+          fi
+          if [ "${actual}" != "${expected}" ]; then
+            echo "::error::Cargo.toml has version ${actual}, expected ${expected}"
+            exit 1
+          fi
+          echo "OK: Cargo.toml version ${actual}"
 
   build:
     name: build on ${{ matrix.os }} (${{ matrix.target }})
     needs: verify-release-version
-    if: ${{ github.event_name == 'release' || github.head_ref == 'dev' }}
     strategy:
       fail-fast: false
       matrix:
