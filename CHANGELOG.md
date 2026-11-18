@@ -14,9 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Features
 
-* **edgelist:** add marker_sequence_1 and marker_sequence_2 columns to the edgelist Parquet ([c2c6f83](https://github.com/PixelgenTechnologies/pixelator-core/commit/c2c6f83eff421bedefb99b34cd200fd5110d7f02))
-* **edgelist:** add marker_sequence_1 and marker_sequence_2 columns to the edgelist Parquet ([228d054](https://github.com/PixelgenTechnologies/pixelator-core/commit/228d054ca46b5b786dad351fa5da8428a70a86c4))
-* **edgelist:** add marker_sequence_1 and marker_sequence_2 columns to the edgelist Parquet ([4fd0646](https://github.com/PixelgenTechnologies/pixelator-core/commit/4fd06464fd4b1e58fe690baa3ca9c5d4910fcccb))
+* **edgelist:** add marker_sequence_1 and marker_sequence_2 columns to the edgelist Parquet ([#48](https://github.com/PixelgenTechnologies/pixelator-core/issues/48)) ([c2c6f83](https://github.com/PixelgenTechnologies/pixelator-core/commit/c2c6f83eff421bedefb99b34cd200fd5110d7f02))
 * support Python 3.12 to 3.14 and drop Python 3.11 ([#54](https://github.com/PixelgenTechnologies/pixelator-core/issues/54)) ([4fc291d](https://github.com/PixelgenTechnologies/pixelator-core/commit/4fc291dfaa955e29f2f70d68026fec4c88402149))
 
 ## [1.0.2] - 2026-10-29
