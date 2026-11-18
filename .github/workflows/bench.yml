@@ -2,7 +2,7 @@ name: benchmark
 
 on:
   push:
-    branches: [dev]
+    branches: [dev, main]
   pull_request:
     branches: [dev]
 
@@ -37,11 +37,23 @@ jobs:
           python3 ${{ github.workspace }}/.github/scripts/divan2json.py output.txt bench_results.json
           cat bench_results.json
 
-      # Both events compare against the history recorded on gh-page, but they
-      # report it differently: a push publishes the new point silently, while a
-      # pull request leaves the comparison as a review comment without
-      # publishing. Commenting is off on push because there is no PR to comment
-      # on, so the action would scatter comments over individual commits.
+      # dev/bench is one point per push to dev. main/bench is one point per
+      # release, because main only moves when a release is published. A push
+      # publishes that point. A pull request only comments, so the chart stays
+      # limited to commits that landed. Release-please PRs comment against the
+      # release chart; every other PR comments against the dev chart.
+      - name: Choose benchmark history
+        id: history
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ] && [[ "${{ github.head_ref }}" == release-please--branches--* ]]; then
+            echo "dir=main/bench" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "dir=${{ github.base_ref }}/bench" >> "$GITHUB_OUTPUT"
+          else
+            echo "dir=${{ github.ref_name }}/bench" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Store benchmark results (publish on push, comment on pull request)
         uses: benchmark-action/github-action-benchmark@v1
         with:
@@ -50,6 +62,7 @@ jobs:
           output-file-path: ${{ github.workspace }}/bench_results.json
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: ${{ github.event_name == 'push' }}
+          benchmark-data-dir-path: ${{ steps.history.outputs.dir }}
           gh-pages-branch: "gh-page"
           comment-always: ${{ github.event_name == 'pull_request' }}
           alert-threshold: "200%"

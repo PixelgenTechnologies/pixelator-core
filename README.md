@@ -104,7 +104,13 @@ To add more benchmarks see the `packages/pixelator_core/benches/main.rs` file.
 
 Peak-heap memory for graph construction, fast label propagation, and Leiden is
 reported by Divan's `AllocProfiler` as `max alloc` on the `mem_*` benches. The
-same `cargo bench` run records those values as extra charts at
-https://pixelgentechnologies.github.io/pixelator-core/dev/bench/index.html on
-pushes to `main` and `dev`. Pull requests still run the benchmarks and comment
-the deltas, but they do not write the published history.
+same `cargo bench` run records those values as extra charts:
+
+- Pushes to `dev` publish the fine-grained history at
+  https://pixelgentechnologies.github.io/pixelator-core/dev/bench/index.html.
+- Pushes to `main`, one per release, publish
+  https://pixelgentechnologies.github.io/pixelator-core/main/bench/index.html.
+
+Pull requests comment the deltas and do not write either history. A
+release-please pull request is compared with the previous release. Every other
+pull request is compared with the last push to `dev`.
