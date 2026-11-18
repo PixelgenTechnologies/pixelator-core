@@ -9,7 +9,7 @@ use paraseq::Record;
 use crate::common::panel::PanelSearcher;
 use crate::common::{Assay, Panel};
 
-use super::read_layout::{ConjugateSide, Read, RegionLayout, Strand};
+use super::read_layout::{ConjugateSide, Read, RegionLayout, SideBounds, Strand};
 
 pub use drop_reason::DropReason;
 pub use filters::{DEFAULT_LBS_OVERLAP_MAX_EDITS, FilterConfig};
@@ -17,6 +17,15 @@ pub use lbs_searcher::LbsSearcher;
 pub use row::Row;
 
 use filters::{avg_phred_below, has_n, umi_base_freq_exceeds};
+
+/// How many bases a single read may run past the amplicon's design length and
+/// still have its far conjugate read from the actual read end when the design
+/// end misses the panel.
+///
+/// That covers amplicons carrying an insertion of a few bases between the
+/// conjugates. A read much longer than the amplicon more likely runs into a
+/// second, concatenated amplicon, whose end does not belong to this one.
+const FAR_END_FALLBACK_MAX_TAIL: usize = 10;
 
 /// Decides whether a read yields an edgelist row, and builds the row if it does.
 ///
@@ -47,20 +56,22 @@ impl Extractor {
     /// Validates and extracts a read (single-end) or read pair (paired-end) into
     /// a [`Row`], or reports the [`DropReason`] for which it is discarded.
     ///
-    /// Each conjugate is resolved by [`Extractor::extract_side`]: paired reads
-    /// take conjugate A from R1 (forward strand) and conjugate B from R2 (reverse
-    /// strand); single-end reads take both conjugates from the one read at its
-    /// strand.
+    /// Paired reads take conjugate A from the start of R1 (forward strand) and
+    /// conjugate B from the start of R2 (reverse strand), both by
+    /// [`Extractor::extract_side`]. Single-end reads take the conjugate at the
+    /// read's 5' end the same way and the one at its 3' end by
+    /// [`Extractor::extract_far_side`], so an indel between the two conjugates
+    /// moves neither.
     pub fn extract<R: Record>(&self, read: &Read<'_, R>) -> Result<Row, DropReason> {
         // Matching on `*read` binds the inner `&R`s directly; matching on `read`
         // would bind `&&R`, which `extract_side` cannot take as a record.
         let ((marker_idx1, umi1), (marker_idx2, umi2)) = match *read {
             Read::SingleForward(r) => (
                 self.extract_side(r, Strand::Forward, ConjugateSide::A)?,
-                self.extract_side(r, Strand::Forward, ConjugateSide::B)?,
+                self.extract_far_side(r, Strand::Forward, ConjugateSide::B)?,
             ),
             Read::SingleReverse(r) => (
-                self.extract_side(r, Strand::Reverse, ConjugateSide::A)?,
+                self.extract_far_side(r, Strand::Reverse, ConjugateSide::A)?,
                 self.extract_side(r, Strand::Reverse, ConjugateSide::B)?,
             ),
             Read::Paired { r1, r2 } => (
@@ -78,25 +89,78 @@ impl Extractor {
     }
 
     /// Extracts one conjugate (marker index + UMI) from `r`, reading its
-    /// `pid`/`umi` regions at `strand`'s bounds and orientation.
-    ///
-    /// Filters run in an order that tries to minimize work before dropping a
-    /// read.
+    /// `pid`/`umi` regions at `strand`'s fixed bounds and orientation.
     fn extract_side<Rf: Record>(
         &self,
         r: &Rf,
         strand: Strand,
         side: ConjugateSide,
     ) -> Result<(i32, u64), DropReason> {
+        self.extract_at(r, strand, side, self.layout.get(side, strand))
+    }
+
+    /// Extracts the conjugate at a single read's 3' end, measuring its regions
+    /// back from where the amplicon ends instead of forward from the read start.
+    ///
+    /// The amplicon is first assumed to end at its design length (or at the
+    /// read end, for shorter reads), so a read that fixed offsets resolve
+    /// resolves identically. Only if that pid is not matched and the read runs
+    /// at most [`FAR_END_FALLBACK_MAX_TAIL`] bases past the design length is
+    /// the actual read end tried: that is an amplicon lengthened by an
+    /// insertion. If both fail, the first attempt's reason is reported.
+    fn extract_far_side<Rf: Record>(
+        &self,
+        r: &Rf,
+        strand: Strand,
+        side: ConjugateSide,
+    ) -> Result<(i32, u64), DropReason> {
+        let read_len = r.seq().len();
+        let amplicon_len = self.layout.amplicon_len();
+        let ending_at = |end| {
+            let bounds = self
+                .layout
+                .get_ending_at(side, strand, end)
+                .ok_or(DropReason::TooShort)?;
+            self.extract_at(r, strand, side, bounds)
+        };
+
+        let at_design_end = ending_at(read_len.min(amplicon_len));
+        let pid_missed = matches!(
+            at_design_end,
+            Err(DropReason::Pid1NotInPanel
+                | DropReason::Pid2NotInPanel
+                | DropReason::Pid1Ambiguous
+                | DropReason::Pid2Ambiguous)
+        );
+        let short_tail =
+            read_len > amplicon_len && read_len - amplicon_len <= FAR_END_FALLBACK_MAX_TAIL;
+        if pid_missed && short_tail {
+            ending_at(read_len).or(at_design_end)
+        } else {
+            at_design_end
+        }
+    }
+
+    /// Extracts one conjugate from `r` at the given region `bounds`.
+    ///
+    /// Filters run in an order that tries to minimize work before dropping a
+    /// read.
+    fn extract_at<Rf: Record>(
+        &self,
+        r: &Rf,
+        strand: Strand,
+        side: ConjugateSide,
+        bounds: SideBounds,
+    ) -> Result<(i32, u64), DropReason> {
         // No quality metrics are reported here. This returns at the first problem
         // it finds, so it never sees enough of the read to measure one; that is
         // `QcProfiler`'s job, and it covers the reads dropped here too.
         let seq = r.seq();
 
-        let (pid_start, pid_end) = self.layout.get(side, strand).pid;
+        let (pid_start, pid_end) = bounds.pid;
         let pid_slice = seq.get(pid_start..pid_end).ok_or(DropReason::TooShort)?;
 
-        let (umi_start, umi_end) = self.layout.get(side, strand).umi;
+        let (umi_start, umi_end) = bounds.umi;
         let umi_slice = seq.get(umi_start..umi_end).ok_or(DropReason::TooShort)?;
 
         // Only the informative regions (pid + umi) are checked for `N`; linker/uei
@@ -442,19 +506,22 @@ mod tests {
     fn truncated_read_drops_as_too_short() {
         let assay = proxiome_v2_assay();
         let markers = proxiome_v2_marker_sequences();
+        // One base short of a pid + umi at each end.
         let mix = ReadMixConfig {
             frac_has_n: 0.0,
             frac_unknown_pid: 0.0,
-            read_len: 100,
+            read_len: 2 * (28 + 10) - 1,
         };
-        let records = generate_single_reads(&assay, &markers, 20, mix, 3, Strand::Forward);
 
         let ex = extractor();
-        for r in &records {
-            // Unknown pids are random bases; pid-1 is checked first, so the pair
-            // drops there (with vanishing probability of a random panel hit).
-            let read = Read::SingleForward(&r);
-            assert_eq!(ex.extract(&read), Err(DropReason::TooShort));
+        for strand in [Strand::Forward, Strand::Reverse] {
+            for r in &generate_single_reads(&assay, &markers, 20, mix, 3, strand) {
+                let read = match strand {
+                    Strand::Forward => Read::SingleForward(&r),
+                    Strand::Reverse => Read::SingleReverse(&r),
+                };
+                assert_eq!(ex.extract(&read), Err(DropReason::TooShort), "{strand:?}");
+            }
         }
     }
 
@@ -516,6 +583,114 @@ mod tests {
 
             assert_eq!(row_fwd, row_rev, "single-forward vs single-reverse");
             assert_eq!(row_fwd, row_paired, "single-forward vs paired");
+        }
+    }
+
+    /// Amplicon-length forward reads with `edit` applied to each, paired with
+    /// the row the unedited read extracts to.
+    fn edited_amplicons(edit: impl Fn(&mut Vec<u8>, &Assay), seed: u64) -> Vec<(OwnedRecord, Row)> {
+        let assay = proxiome_v2_assay();
+        let markers = proxiome_v2_marker_sequences();
+        let (_, amplicon_len) = assay
+            .forward_bounds("amplicon")
+            .expect("amplicon region in assay");
+        let mix = ReadMixConfig {
+            frac_has_n: 0.0,
+            frac_unknown_pid: 0.0,
+            read_len: amplicon_len,
+        };
+        let ex = extractor();
+        generate_single_reads(&assay, &markers, 50, mix, seed, Strand::Forward)
+            .into_iter()
+            .map(|mut r| {
+                let rec_ref = &r;
+                let row = ex
+                    .extract(&Read::SingleForward(&rec_ref))
+                    .expect("unedited read should extract");
+                edit(&mut r.seq, &assay);
+                r.qual = vec![b'I'; r.seq.len()];
+                (r, row)
+            })
+            .collect()
+    }
+
+    fn reverse_read(fwd: &OwnedRecord) -> OwnedRecord {
+        OwnedRecord {
+            id: Vec::new(),
+            seq: revcomp(&fwd.seq),
+            qual: fwd.qual.iter().rev().copied().collect(),
+        }
+    }
+
+    fn delete_in_lbs1(seq: &mut Vec<u8>, assay: &Assay) {
+        let (start, _) = assay.forward_bounds("lbs-1").expect("lbs-1 bounds");
+        seq.drain(start + 5..start + 8);
+    }
+
+    fn insert_in_uei(seq: &mut Vec<u8>, assay: &Assay) {
+        let (start, _) = assay.forward_bounds("uei").expect("uei bounds");
+        seq.splice(start + 5..start + 5, *b"ACG");
+    }
+
+    /// A deletion between the conjugates shortens the read below the amplicon
+    /// length; reading the far conjugate from the read end still recovers both.
+    #[test]
+    fn deletion_between_conjugates_is_recovered() {
+        let ex = extractor();
+        for (fwd, expected) in edited_amplicons(delete_in_lbs1, 11) {
+            let rev = reverse_read(&fwd);
+            let (fwd, rev) = (&fwd, &rev);
+            assert_eq!(
+                ex.extract(&Read::SingleForward(&fwd)).as_ref(),
+                Ok(&expected)
+            );
+            assert_eq!(
+                ex.extract(&Read::SingleReverse(&rev)).as_ref(),
+                Ok(&expected)
+            );
+        }
+    }
+
+    /// An insertion between the conjugates misplaces the far pid at the design
+    /// length, so it is recovered from the actual read end.
+    #[test]
+    fn insertion_between_conjugates_is_recovered_from_read_end() {
+        let ex = extractor();
+        for (fwd, expected) in edited_amplicons(insert_in_uei, 12) {
+            let rev = reverse_read(&fwd);
+            let (fwd, rev) = (&fwd, &rev);
+            assert_eq!(
+                ex.extract(&Read::SingleForward(&fwd)).as_ref(),
+                Ok(&expected)
+            );
+            assert_eq!(
+                ex.extract(&Read::SingleReverse(&rev)).as_ref(),
+                Ok(&expected)
+            );
+        }
+    }
+
+    /// Past [`FAR_END_FALLBACK_MAX_TAIL`] the read end is not trusted to be the
+    /// amplicon end, so an insertion read with a long tail stays dropped.
+    #[test]
+    fn insertion_read_with_long_tail_is_not_recovered() {
+        let tail = vec![b'T'; FAR_END_FALLBACK_MAX_TAIL];
+        let with_tail = |seq: &mut Vec<u8>, assay: &Assay| {
+            insert_in_uei(seq, assay);
+            seq.extend_from_slice(&tail);
+        };
+        let ex = extractor();
+        for (fwd, _) in edited_amplicons(with_tail, 13) {
+            let rev = reverse_read(&fwd);
+            let (fwd, rev) = (&fwd, &rev);
+            assert_eq!(
+                ex.extract(&Read::SingleForward(&fwd)),
+                Err(DropReason::Pid2NotInPanel)
+            );
+            assert_eq!(
+                ex.extract(&Read::SingleReverse(&rev)),
+                Err(DropReason::Pid1NotInPanel)
+            );
         }
     }
 
