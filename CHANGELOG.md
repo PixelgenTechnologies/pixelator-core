@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0](https://github.com/PixelgenTechnologies/pixelator-core/compare/v1.0.2...v2.0.0) (2026-11-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* support Python 3.12 to 3.14 and drop Python 3.11 ([#54](https://github.com/PixelgenTechnologies/pixelator-core/issues/54))
+
+### Features
+
+* **edgelist:** add marker_sequence_1 and marker_sequence_2 columns to the edgelist Parquet ([#48](https://github.com/PixelgenTechnologies/pixelator-core/issues/48)) ([c2c6f83](https://github.com/PixelgenTechnologies/pixelator-core/commit/c2c6f83eff421bedefb99b34cd200fd5110d7f02))
+* support Python 3.12 to 3.14 and drop Python 3.11 ([#54](https://github.com/PixelgenTechnologies/pixelator-core/issues/54)) ([4fc291d](https://github.com/PixelgenTechnologies/pixelator-core/commit/4fc291dfaa955e29f2f70d68026fec4c88402149))
+
 ## [1.0.2] - 2026-10-29
 
 ### Changed

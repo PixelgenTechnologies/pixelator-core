@@ -1,6 +1,6 @@
 # pixelator_core_py
 
-[![Python versions](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)](https://github.com/PixelgenTechnologies/pixelator-core/actions/workflows/wheels.yml)
+[![Python versions](https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14-blue)](https://github.com/PixelgenTechnologies/pixelator-core/actions/workflows/wheels.yml)
 
 Python bindings for `pixelator-core`, exposing Rust implementations of graph
 statistics and community detection algorithms for fast execution from Python.
@@ -18,11 +18,11 @@ statistics and community detection algorithms for fast execution from Python.
 
 ## Requirements
 
-- Python 3.11+
+- Python 3.12+
 - Rust toolchain (for building from source)
 - `maturin` (installed automatically when using `uv`)
 
-CI currently builds wheels for Linux, macOS, and Windows across Python 3.11-3.13.
+CI currently builds wheels for Linux, macOS, and Windows across Python 3.12-3.14.
 
 ## Installation
 

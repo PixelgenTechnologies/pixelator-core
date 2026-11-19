@@ -68,7 +68,7 @@ jobs:
 
     runs-on: ${{ matrix.runs-on || format('{0}-latest', (matrix.os == 'linux' && 'ubuntu') || matrix.os) }}
     env:
-      PYTHON_INTERPRETERS: 3.11 3.12 3.13
+      PYTHON_INTERPRETERS: 3.12 3.13 3.14
     steps:
       - uses: actions/checkout@v6
       - name: set up python
