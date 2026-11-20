@@ -1,108 +1,107 @@
 """Tests for the `graph_collapse` binding."""
 
+import numpy as np
 import pixelator_core
-import pyarrow as pa
+import pytest
 
 
 def _umi(seq):
     return pixelator_core.encode_dna_2bit(seq)
 
 
-def _reader(rows):
-    """A record-batch reader with one batch per group of rows.
+def _collapse(rows, **kwargs):
+    """Run `graph_collapse` on `(umi1, umi2, component)` rows.
 
-    Each group is `(umi1, umi2, component)` tuples. Groups become separate
-    batches so a component can cross a batch boundary.
+    `component` is an integer id. The rows are passed as the three numpy
+    arrays the binding takes.
     """
-    schema = pa.schema(
-        [
-            ("umi1", pa.uint64()),
-            ("umi2", pa.uint64()),
-            ("component", pa.string()),
-        ]
-    )
-    batches = [
-        pa.record_batch(
-            {
-                "umi1": pa.array([row[0] for row in group], type=pa.uint64()),
-                "umi2": pa.array([row[1] for row in group], type=pa.uint64()),
-                "component": pa.array([row[2] for row in group], type=pa.string()),
-            },
-            schema=schema,
-        )
-        for group in rows
-    ]
-    return pa.RecordBatchReader.from_batches(schema, batches)
+    umi1 = np.array([row[0] for row in rows], dtype=np.uint64)
+    umi2 = np.array([row[1] for row in rows], dtype=np.uint64)
+    component = np.array([row[2] for row in rows], dtype=np.uint32)
+    kwargs.setdefault("n_threads", 1)
+    return pixelator_core.graph_collapse(umi1, umi2, component, **kwargs)
 
 
-def _pairs(table):
-    return set(
-        zip(
-            table.column("original").to_pylist(),
-            table.column("corrected").to_pylist(),
-        )
-    )
+def _pairs(renames):
+    return set(zip(renames["original"].tolist(), renames["corrected"].tolist()))
 
 
 def test_chain_collapses_within_its_component_only():
-    """A leaf chain split across batches collapses onto its end, and a second component does not.
+    """A leaf chain collapses onto its end, and a second component does not.
 
     CCAA is one symbol from CAAA, and CAAA is one symbol from AAAA, the end of
     the chain. CAAA is also one symbol from CCAA; AAAA comes first because rows
     are searched in UMI order. GGGG and TTTT are umi1, and the other UMIs are
     umi2, so no UMI sits on both sides. The other component is a single edge
-    between distant UMIs.
+    between distant UMIs, and its row sits among the chain's rows.
     """
     umi_m = _umi("GGGG")
     umi_h = _umi("AAAA")
     umi_a = _umi("CCAA")
     umi_b = _umi("CAAA")
     umi_n = _umi("TTTT")
-    reader = _reader(
-        [
-            [(umi_m, umi_h, "cell"), (umi_m, umi_a, "cell")],
-            [
-                (umi_m, umi_b, "cell"),
-                (umi_n, umi_h, "cell"),
-                (_umi("ACAC"), _umi("GTGT"), "other"),
-            ],
-        ]
-    )
+    rows = [
+        (umi_m, umi_h, 0),
+        (umi_m, umi_a, 0),
+        (_umi("ACAC"), _umi("GTGT"), 1),
+        (umi_m, umi_b, 0),
+        (umi_n, umi_h, 0),
+    ]
 
-    table, _stats = pixelator_core.graph_collapse(
-        reader, n_threads=1, bfs_threshold=2, hamming_threshold=1
-    )
+    renames, _stats = _collapse(rows, bfs_threshold=2, hamming_threshold=1)
 
-    assert table.column_names == ["original", "corrected"]
-    assert _pairs(table) == {(umi_a, umi_h), (umi_b, umi_h)}
+    assert list(renames) == ["component", "original", "corrected"]
+    assert renames["component"].dtype == np.uint32
+    assert renames["original"].dtype == np.uint64
+    assert renames["corrected"].dtype == np.uint64
+    assert renames["component"].tolist() == [0, 0]
+    assert _pairs(renames) == {(umi_a, umi_h), (umi_b, umi_h)}
+
+
+def test_renames_are_sorted_by_component_then_original():
+    """The same chain in components 5 and 2 is reported per component, in order."""
+    umi_m = _umi("GGGG")
+    umi_h = _umi("AAAA")
+    umi_a = _umi("CCAA")
+    umi_b = _umi("CAAA")
+    umi_n = _umi("TTTT")
+    chain = [(umi_m, umi_h), (umi_m, umi_a), (umi_m, umi_b), (umi_n, umi_h)]
+    rows = [(u1, u2, c) for u1, u2 in chain for c in (5, 2)]
+
+    renames, stats = _collapse(rows, bfs_threshold=2, hamming_threshold=1)
+
+    first, second = sorted([umi_a, umi_b])
+    assert list(
+        zip(
+            renames["component"].tolist(),
+            renames["original"].tolist(),
+            renames["corrected"].tolist(),
+        )
+    ) == [(2, first, umi_h), (2, second, umi_h), (5, first, umi_h), (5, second, umi_h)]
+    assert stats["total_components"] == 2
 
 
 def test_stats_count_what_the_search_did():
     """The stats dict covers every component, with the keys the report will use.
 
-    This is the chain from the test above, plus the second component. "cell" has
-    three leaves (CCAA, CAAA and TTTT) and "other" has two. Only CCAA -> CAAA and
-    CAAA -> AAAA are found, each two hops and one symbol apart.
+    This is the chain from the test above, plus the second component. Component 0
+    has three leaves (CCAA, CAAA and TTTT) and component 1 has two. Only
+    CCAA -> CAAA and CAAA -> AAAA are found, each two hops and one symbol apart.
     """
     umi_m = _umi("GGGG")
     umi_h = _umi("AAAA")
     umi_a = _umi("CCAA")
     umi_b = _umi("CAAA")
     umi_n = _umi("TTTT")
-    reader = _reader(
-        [
-            [(umi_m, umi_h, "cell"), (umi_m, umi_a, "cell")],
-            [
-                (umi_m, umi_b, "cell"),
-                (umi_n, umi_h, "cell"),
-                (_umi("ACAC"), _umi("GTGT"), "other"),
-            ],
-        ]
-    )
+    rows = [
+        (umi_m, umi_h, 0),
+        (umi_m, umi_a, 0),
+        (umi_m, umi_b, 0),
+        (umi_n, umi_h, 0),
+        (_umi("ACAC"), _umi("GTGT"), 1),
+    ]
 
-    _table, stats = pixelator_core.graph_collapse(
-        reader, n_threads=1, bfs_threshold=2, hamming_threshold=1
-    )
+    _renames, stats = _collapse(rows, bfs_threshold=2, hamming_threshold=1)
 
     assert stats == {
         "total_components": 2,
@@ -116,31 +115,24 @@ def test_stats_count_what_the_search_did():
 def test_stats_distributions_are_in_ascending_distance_order():
     """Dict insertion order carries the ordering, so it must be ascending.
 
-    "far" is the path AAAA - TTTT - GGGG - CGCG - CAAA - GCGC, where the umi1
-    ends AAAA and CAAA are four hops and one symbol apart, and AAAA is the only
-    leaf with a match. "near" is a star around GGGG with leaves AAAA and CCAA,
-    two hops and two symbols apart, of which one match is kept. "far" comes
-    first, so a tally in arrival order would list distance 4 before 2.
+    Component 0 is the path AAAA - TTTT - GGGG - CGCG - CAAA - GCGC, where the
+    umi1 ends AAAA and CAAA are four hops and one symbol apart, and AAAA is the
+    only leaf with a match. Component 1 is a star around GGGG with leaves AAAA
+    and CCAA, two hops and two symbols apart, of which one match is kept.
+    Component 0 comes first, so a tally in arrival order would list distance 4
+    before 2.
     """
-    reader = _reader(
-        [
-            [
-                (_umi("AAAA"), _umi("TTTT"), "far"),
-                (_umi("GGGG"), _umi("TTTT"), "far"),
-                (_umi("GGGG"), _umi("CGCG"), "far"),
-                (_umi("CAAA"), _umi("CGCG"), "far"),
-                (_umi("CAAA"), _umi("GCGC"), "far"),
-            ],
-            [
-                (_umi("GGGG"), _umi("AAAA"), "near"),
-                (_umi("GGGG"), _umi("CCAA"), "near"),
-            ],
-        ]
-    )
+    rows = [
+        (_umi("AAAA"), _umi("TTTT"), 0),
+        (_umi("GGGG"), _umi("TTTT"), 0),
+        (_umi("GGGG"), _umi("CGCG"), 0),
+        (_umi("CAAA"), _umi("CGCG"), 0),
+        (_umi("CAAA"), _umi("GCGC"), 0),
+        (_umi("GGGG"), _umi("AAAA"), 1),
+        (_umi("GGGG"), _umi("CCAA"), 1),
+    ]
 
-    _table, stats = pixelator_core.graph_collapse(
-        reader, n_threads=1, bfs_threshold=4, hamming_threshold=2
-    )
+    _renames, stats = _collapse(rows, bfs_threshold=4, hamming_threshold=2)
 
     assert stats["total_components"] == 2
     assert stats["nodes_considered"] == 4
@@ -159,20 +151,18 @@ def test_max_degree_skips_nodes_above_the_cutoff():
     umi_d = _umi("AAAA")
     umi_s = _umi("CAAA")
     rows = [
-        [
-            (umi_d, _umi("GGGG"), "cell"),
-            (umi_d, _umi("TTTT"), "cell"),
-            (umi_s, _umi("GGGG"), "cell"),
-            (umi_s, _umi("CCCC"), "cell"),
-            (umi_s, _umi("ATAT"), "cell"),
-        ]
+        (umi_d, _umi("GGGG"), 0),
+        (umi_d, _umi("TTTT"), 0),
+        (umi_s, _umi("GGGG"), 0),
+        (umi_s, _umi("CCCC"), 0),
+        (umi_s, _umi("ATAT"), 0),
     ]
 
-    leaves_only, leaves_only_stats = pixelator_core.graph_collapse(
-        _reader(rows), n_threads=1, bfs_threshold=2, hamming_threshold=1
+    leaves_only, leaves_only_stats = _collapse(
+        rows, bfs_threshold=2, hamming_threshold=1
     )
-    with_degree_two, with_degree_two_stats = pixelator_core.graph_collapse(
-        _reader(rows), n_threads=1, bfs_threshold=2, hamming_threshold=1, max_degree=2
+    with_degree_two, with_degree_two_stats = _collapse(
+        rows, bfs_threshold=2, hamming_threshold=1, max_degree=2
     )
 
     assert _pairs(leaves_only) == set()
@@ -184,7 +174,7 @@ def test_max_degree_skips_nodes_above_the_cutoff():
     assert with_degree_two_stats["targets_found"] == 1
 
 
-def test_row_order_within_a_component_does_not_change_the_result():
+def test_row_order_does_not_change_the_result():
     """A leaf with two equally good targets gets the same one for any row order.
 
     AAAA is a leaf of GGGG. CAAA and GAAA are also neighbors of GGGG, each one
@@ -193,20 +183,16 @@ def test_row_order_within_a_component_does_not_change_the_result():
     otherwise follow the row order.
     """
     rows = [
-        (_umi("GGGG"), _umi("AAAA"), "cell"),
-        (_umi("GGGG"), _umi("CAAA"), "cell"),
-        (_umi("GGGG"), _umi("GAAA"), "cell"),
-        (_umi("TTTT"), _umi("CAAA"), "cell"),
-        (_umi("ACAC"), _umi("GAAA"), "cell"),
+        (_umi("GGGG"), _umi("AAAA"), 0),
+        (_umi("GGGG"), _umi("CAAA"), 0),
+        (_umi("GGGG"), _umi("GAAA"), 0),
+        (_umi("TTTT"), _umi("CAAA"), 0),
+        (_umi("ACAC"), _umi("GAAA"), 0),
     ]
     orders = [rows, rows[::-1], [rows[i] for i in (2, 0, 4, 1, 3)]]
 
     results = [
-        _pairs(
-            pixelator_core.graph_collapse(
-                _reader([order]), n_threads=1, bfs_threshold=2, hamming_threshold=1
-            )[0]
-        )
+        _pairs(_collapse(order, bfs_threshold=2, hamming_threshold=1)[0])
         for order in orders
     ]
 
@@ -215,14 +201,16 @@ def test_row_order_within_a_component_does_not_change_the_result():
     assert results[2] == results[0]
 
 
-def test_empty_edgelist_returns_an_empty_table():
-    """No rows still produce the original/corrected schema and all-zero stats."""
-    reader = _reader([])
+def test_empty_edgelist_returns_empty_renames():
+    """No rows still produce the three typed arrays and all-zero stats."""
+    renames, stats = _collapse([])
 
-    table, stats = pixelator_core.graph_collapse(reader, n_threads=1)
-
-    assert table.num_rows == 0
-    assert table.column_names == ["original", "corrected"]
+    assert {name: array.dtype for name, array in renames.items()} == {
+        "component": np.uint32,
+        "original": np.uint64,
+        "corrected": np.uint64,
+    }
+    assert all(len(array) == 0 for array in renames.values())
     assert stats == {
         "total_components": 0,
         "nodes_considered": 0,
@@ -230,3 +218,21 @@ def test_empty_edgelist_returns_an_empty_table():
         "bfs_distance_distribution": {},
         "hamming_distance_distribution": {},
     }
+
+
+def test_arrays_of_different_lengths_are_a_value_error():
+    umi1 = np.array([1, 2], dtype=np.uint64)
+    umi2 = np.array([3, 4], dtype=np.uint64)
+    component = np.array([0], dtype=np.uint32)
+
+    with pytest.raises(ValueError, match="must have the same length, got 2, 2 and 1"):
+        pixelator_core.graph_collapse(umi1, umi2, component, n_threads=1)
+
+
+def test_a_component_of_another_dtype_is_a_type_error():
+    umi1 = np.array([1], dtype=np.uint64)
+    umi2 = np.array([2], dtype=np.uint64)
+    component = np.array([0], dtype=np.int64)
+
+    with pytest.raises(TypeError):
+        pixelator_core.graph_collapse(umi1, umi2, component, n_threads=1)

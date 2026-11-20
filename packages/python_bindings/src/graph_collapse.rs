@@ -1,16 +1,8 @@
-use std::sync::Arc;
-
-use arrow::array::{Array, AsArray, PrimitiveArray, RecordBatch, StringArray, UInt64Array};
-use arrow::datatypes::{DataType, Field, Schema, UInt64Type};
-use arrow::error::ArrowError;
-use arrow::pyarrow::{PyArrowType, Table};
-use itertools::structs::ChunkBy;
-use itertools::Itertools;
-
-use pyo3::exceptions::PyRuntimeError;
+use numpy::{IntoPyArray, PyReadonlyArray1};
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use rayon::slice::ParallelSliceMut;
+use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 
 use pixelator_core::common::graph::Graph;
@@ -23,20 +15,26 @@ fn to_py_err(err: impl std::fmt::Debug) -> PyErr {
     PyRuntimeError::new_err(format!("{err:?}"))
 }
 
-/// One edgelist row: `(umi1, umi2, component)`.
-type EdgelistRow = (u64, u64, String);
+/// One edgelist row: `(component, umi1, umi2)`.
+type EdgelistRow = (u32, u64, u64);
+
+/// One collapsed UMI: `(component, original, corrected)`.
+type Rename = (u32, u64, u64);
 
 /// Collapse likely sequencing-error UMIs in an edgelist.
 ///
-/// The edgelist must be sorted by `component`, so each component is a
-/// contiguous run of rows. A component may span several record batches. The
-/// rows within a component may come in any order: they are sorted before the
-/// graph is built, so the result does not depend on it.
+/// The three arrays are the columns of the edgelist, one entry per edge. All
+/// edges are held in memory, so the caller bounds memory by passing one batch
+/// of whole components at a time. Rows may come in any order: they are grouped
+/// by `component` and sorted before each graph is built, so the result does not
+/// depend on the order. Components are searched in parallel.
 ///
 /// Args:
-///     edgelist_reader: A pyarrow `RecordBatchReader` with `umi1` and `umi2`
-///         (uint64) and `component` (string) columns, sorted by `component`.
-///     n_threads: Number of worker threads for the per-component search.
+///     umi1: 1-D uint64 numpy array of 2-bit-encoded `umi1` values.
+///     umi2: 1-D uint64 numpy array of 2-bit-encoded `umi2` values.
+///     component: 1-D uint32 numpy array with the component of each edge. It
+///         only has to tell components apart; the caller maps it back to a name.
+///     n_threads: Number of worker threads for the search.
 ///     bfs_threshold: Maximum graph distance searched for a correction target.
 ///     hamming_threshold: Maximum Hamming distance between an investigated UMI
 ///         and its correction target.
@@ -44,10 +42,14 @@ type EdgelistRow = (u64, u64, String);
 ///         default, 1, investigates only leaves.
 ///
 /// Returns:
-///     A `(table, stats)` tuple.
+///     A `(renames, stats)` tuple.
 ///
-///     `table` is a pyarrow `Table` with `original` and `corrected` uint64
-///     columns, one row per collapsed UMI.
+///     `renames` is a dict of three equally long 1-D numpy arrays, one entry per
+///     collapsed UMI, sorted by `component` and then `original`:
+///
+///     - `component` (uint32): the component the UMI was collapsed in.
+///     - `original` (uint64): the collapsed UMI.
+///     - `corrected` (uint64): the UMI it is collapsed into.
 ///
 ///     `stats` is a dict of what the search counted, over all components:
 ///
@@ -63,166 +65,146 @@ type EdgelistRow = (u64, u64, String);
 ///     order. Each distance is that of the match as found: for a chain
 ///     `A -> B -> H` it is the distance from A to B and from B to H, not from
 ///     A to H.
+///
+/// Raises:
+///     ValueError: If the arrays differ in length.
 #[pyfunction(
     name = "graph_collapse",
     signature = (
-        edgelist_reader,
+        umi1,
+        umi2,
+        component,
         n_threads,
         bfs_threshold=6,
         hamming_threshold=2,
         max_degree=1,
     )
 )]
+#[allow(clippy::too_many_arguments)]
 pub fn py_graph_collapse<'py>(
     py: Python<'py>,
-    edgelist_reader: PyArrowType<arrow::ffi_stream::ArrowArrayStreamReader>,
+    umi1: PyReadonlyArray1<'py, u64>,
+    umi2: PyReadonlyArray1<'py, u64>,
+    component: PyReadonlyArray1<'py, u32>,
     n_threads: usize,
     bfs_threshold: u64,
     hamming_threshold: u8,
     max_degree: u64,
-) -> PyResult<(PyArrowType<Table>, Bound<'py, PyDict>)> {
+) -> PyResult<(Bound<'py, PyDict>, Bound<'py, PyDict>)> {
+    let (umi1, umi2, component) = (umi1.as_array(), umi2.as_array(), component.as_array());
+    if umi1.len() != umi2.len() || umi1.len() != component.len() {
+        return Err(PyValueError::new_err(format!(
+            "umi1, umi2 and component must have the same length, got {}, {} and {}",
+            umi1.len(),
+            umi2.len(),
+            component.len()
+        )));
+    }
+    // Copied while the GIL is held, so Python cannot change the arrays while
+    // the search runs without it.
+    let rows: Vec<EdgelistRow> = component
+        .iter()
+        .zip(umi1.iter())
+        .zip(umi2.iter())
+        .map(|((&component, &umi1), &umi2)| (component, umi1, umi2))
+        .collect();
+
     // `graph_collapse` parallelizes on the current Rayon pool. A local pool
-    // keeps that at `n_threads` instead of the CPU count. The GIL is released
-    // for the duration: the pool thread reads the Arrow stream, whose
-    // callbacks take the GIL themselves, and would deadlock if we still held it.
+    // keeps that at `n_threads` instead of the CPU count.
     let pool = ThreadPoolBuilder::new()
         .num_threads(n_threads)
         .build()
         .map_err(to_py_err)?;
-    let PyArrowType(edgelist_reader) = edgelist_reader;
-    let (table, stats) = py
-        .detach(move || {
-            pool.install(|| {
-                run_graph_collapse(
-                    edgelist_reader,
-                    bfs_threshold,
-                    hamming_threshold,
-                    max_degree,
-                )
-            })
-        })
-        .map_err(to_py_err)?;
+    let (renames, stats) = py.detach(move || {
+        pool.install(|| run_graph_collapse(rows, bfs_threshold, hamming_threshold, max_degree))
+    });
 
-    Ok((PyArrowType(table), stats_to_dict(py, &stats)?))
+    Ok((renames_to_dict(py, renames)?, stats_to_dict(py, &stats)?))
 }
 
 /// Run graph collapse on every component of the edgelist.
 ///
-/// Each component is loaded into its own graph and collapsed independently.
-/// Reading stops at the first batch that fails, and that error is returned.
+/// Each component is loaded into its own graph and collapsed independently,
+/// in parallel.
 ///
-/// Returns the collapsed pairs together with the stats summed over components.
+/// Returns the collapsed UMIs, sorted by component and then original UMI,
+/// together with the stats summed over components.
 fn run_graph_collapse(
-    edgelist_reader: impl Iterator<Item = Result<RecordBatch, ArrowError>>,
+    mut rows: Vec<EdgelistRow>,
     bfs_threshold: u64,
     hamming_threshold: u8,
     max_degree: u64,
-) -> Result<(Table, CollapseStats), ArrowError> {
-    let mut global_stats = CollapseStats::default();
-    let (original, corrected): (Vec<u64>, Vec<u64>) =
-        edgelist_reader.process_results(|batches| {
-            batches_to_graph_components(batches)
-                .into_iter()
-                .flat_map(|(_, component_edges)| {
-                    let mut umi_pairs: Vec<_> = component_edges
-                        .map(|(umi1, umi2, _)| (umi1 as UMI, umi2 as UMI))
-                        .collect();
-                    // Node indices and neighbor order follow the edge order, and they
-                    // decide which match the search finds first. Sorting makes the result
-                    // independent of the row order within a component.
-                    umi_pairs.par_sort_unstable();
+) -> (Vec<Rename>, CollapseStats) {
+    // Node indices and neighbor order follow the edge order, and they decide
+    // which match the search finds first. Sorting groups each component into
+    // one run and makes the result independent of the row order.
+    rows.par_sort_unstable();
 
-                    let umi_mapping =
-                        UmiToNodeIndexMapping::from_umi_pairs(umi_pairs.iter().copied());
-                    let num_nodes = umi_mapping.get_num_of_nodes();
-                    let edges = umi_mapping.map_umi_pair_iterator_to_edge(umi_pairs);
-                    let graph = Graph::<u8>::from_edges(edges, num_nodes);
-
-                    let (targets, local_stats) = graph_collapse(
-                        &graph,
-                        &umi_mapping,
-                        bfs_threshold as usize,
-                        hamming_threshold,
-                        max_degree as usize,
-                    );
-                    global_stats.add_components(1);
-                    global_stats += local_stats;
-                    targets
-                })
-                .map(|(original, corrected)| (original as u64, corrected as u64))
-                .unzip()
-        })?;
-
-    arrow_table(original, corrected).map(|table| (table, global_stats))
-}
-
-/// Flatten the batches into `(umi1, umi2, component)` rows grouped by component.
-///
-/// Consecutive rows with the same `component` form one group, regardless of
-/// batch boundaries. The groups must be consumed in order, so the result is
-/// iterated with `(&result).into_iter()` or `for (component, rows) in &result`.
-///
-/// Panics if a column is missing, has the wrong type, or contains a null.
-fn batches_to_graph_components(
-    batch_iter: impl Iterator<Item = RecordBatch>,
-) -> ChunkBy<String, impl Iterator<Item = EdgelistRow>, impl FnMut(&EdgelistRow) -> String> {
-    batch_iter
-        .flat_map(|batch| {
-            let umi1 = uint64_column(&batch, "umi1");
-            let umi2 = uint64_column(&batch, "umi2");
-            let component = utf8_column(&batch, "component");
-            let rows = umi1.len();
-            (0..rows).map(move |row| {
-                (
-                    umi1.value(row),
-                    umi2.value(row),
-                    component.value(row).to_string(),
-                )
-            })
+    let per_component: Vec<(Vec<Rename>, CollapseStats)> = rows
+        .par_chunk_by(|a, b| a.0 == b.0)
+        .map(|component_rows| {
+            collapse_component(component_rows, bfs_threshold, hamming_threshold, max_degree)
         })
-        .chunk_by(|(_, _, component)| component.clone())
+        .collect();
+
+    let mut stats = CollapseStats::default();
+    let mut renames = Vec::new();
+    for (component_renames, component_stats) in per_component {
+        stats.add_components(1);
+        stats += component_stats;
+        renames.extend(component_renames);
+    }
+    (renames, stats)
 }
 
-/// Get a non-null UInt64 column by name.
+/// Collapse one component, given its rows sorted by `(umi1, umi2)`.
 ///
-/// Panics if the column is missing, is not UInt64, or contains a null.
-fn uint64_column(batch: &RecordBatch, name: &str) -> PrimitiveArray<UInt64Type> {
-    let column = batch
-        .column_by_name(name)
-        .unwrap_or_else(|| panic!("Could not find {name} column in data"))
-        .as_primitive_opt::<UInt64Type>()
-        .unwrap_or_else(|| panic!("Column {name} is not UInt64"));
-    assert_eq!(column.null_count(), 0, "{name} contains a null");
-    column.clone()
+/// Returns the component's renames, sorted by original UMI, and its stats.
+fn collapse_component(
+    rows: &[EdgelistRow],
+    bfs_threshold: u64,
+    hamming_threshold: u8,
+    max_degree: u64,
+) -> (Vec<Rename>, CollapseStats) {
+    let component = rows[0].0;
+    let umi_pairs = rows
+        .iter()
+        .map(|&(_, umi1, umi2)| (umi1 as UMI, umi2 as UMI));
+    let umi_mapping = UmiToNodeIndexMapping::from_umi_pairs(umi_pairs.clone());
+    let num_nodes = umi_mapping.get_num_of_nodes();
+    let edges = umi_mapping.map_umi_pair_iterator_to_edge(umi_pairs);
+    let graph = Graph::<u8>::from_edges(edges, num_nodes);
+
+    let (targets, stats) = graph_collapse(
+        &graph,
+        &umi_mapping,
+        bfs_threshold as usize,
+        hamming_threshold,
+        max_degree as usize,
+    );
+    let mut renames: Vec<Rename> = targets
+        .into_iter()
+        .map(|(original, corrected)| (component, original as u64, corrected as u64))
+        .collect();
+    renames.sort_unstable();
+    (renames, stats)
 }
 
-/// Get a non-null Utf8 column by name.
-///
-/// Panics if the column is missing, is not Utf8, or contains a null.
-fn utf8_column(batch: &RecordBatch, name: &str) -> StringArray {
-    let column = batch
-        .column_by_name(name)
-        .unwrap_or_else(|| panic!("Could not find {name} column in data"))
-        .as_string_opt::<i32>()
-        .unwrap_or_else(|| panic!("Column {name} is not Utf8"));
-    assert_eq!(column.null_count(), 0, "{name} contains a null");
-    column.clone()
-}
-
-/// Build a single-batch table with non-null `original` and `corrected` UInt64 columns.
-fn arrow_table(original: Vec<u64>, corrected: Vec<u64>) -> Result<Table, ArrowError> {
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("original", DataType::UInt64, false),
-        Field::new("corrected", DataType::UInt64, false),
-    ]));
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(UInt64Array::from(original)),
-            Arc::new(UInt64Array::from(corrected)),
-        ],
-    )?;
-    Table::try_new(vec![batch], schema)
+/// The renames as a dict of `component`, `original` and `corrected` numpy arrays.
+fn renames_to_dict<'py>(py: Python<'py>, renames: Vec<Rename>) -> PyResult<Bound<'py, PyDict>> {
+    let mut component = Vec::with_capacity(renames.len());
+    let mut original = Vec::with_capacity(renames.len());
+    let mut corrected = Vec::with_capacity(renames.len());
+    for (c, o, r) in renames {
+        component.push(c);
+        original.push(o);
+        corrected.push(r);
+    }
+    let out = PyDict::new(py);
+    out.set_item("component", component.into_pyarray(py))?;
+    out.set_item("original", original.into_pyarray(py))?;
+    out.set_item("corrected", corrected.into_pyarray(py))?;
+    Ok(out)
 }
 
 /// Mirrors [`CollapseStats`] as a plain dict, with the keys listed in the
@@ -251,7 +233,6 @@ fn stats_to_dict<'py>(py: Python<'py>, stats: &CollapseStats) -> PyResult<Bound<
 #[cfg(test)]
 mod tests {
     use pixelator_core::encoding::encode_dna_2bit;
-    use rustc_hash::FxHashSet as HashSet;
 
     use super::*;
 
@@ -259,105 +240,35 @@ mod tests {
         encode_dna_2bit(seq.as_bytes())
     }
 
-    fn batch(umi1: &[u64], umi2: &[u64], component: &[&str]) -> RecordBatch {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("umi1", DataType::UInt64, false),
-            Field::new("umi2", DataType::UInt64, false),
-            Field::new("component", DataType::Utf8, false),
-        ]));
-        RecordBatch::try_new(
-            schema,
-            vec![
-                Arc::new(UInt64Array::from(umi1.to_vec())),
-                Arc::new(UInt64Array::from(umi2.to_vec())),
-                Arc::new(StringArray::from(component.to_vec())),
-            ],
-        )
-        .unwrap()
-    }
-
-    fn component_groups(batches: impl Iterator<Item = RecordBatch>) -> Vec<Vec<(u64, u64)>> {
-        let grouped = batches_to_graph_components(batches);
-        (&grouped)
-            .into_iter()
-            .map(|(_, rows)| rows.map(|(umi1, umi2, _)| (umi1, umi2)).collect())
-            .collect()
-    }
-
-    fn collapsed_pairs(table: &Table) -> HashSet<(u64, u64)> {
-        let batch = &table.record_batches()[0];
-        let original = batch.column(0).as_primitive::<UInt64Type>().values();
-        let corrected = batch.column(1).as_primitive::<UInt64Type>().values();
-        original
-            .iter()
-            .copied()
-            .zip(corrected.iter().copied())
-            .collect()
-    }
-
-    #[test]
-    fn component_runs_cross_batch_boundaries() {
-        // [A, A, B] | [B, C] | [C]. B and C each continue into the next batch.
-        let batches = [
-            batch(&[1, 2, 3], &[10, 20, 30], &["A", "A", "B"]),
-            batch(&[4, 5], &[40, 50], &["B", "C"]),
-            batch(&[6], &[60], &["C"]),
-        ];
-
-        assert_eq!(
-            component_groups(batches.into_iter()),
-            vec![
-                vec![(1, 10), (2, 20)],
-                vec![(3, 30), (4, 40)],
-                vec![(5, 50), (6, 60)],
-            ]
-        );
-    }
-
-    #[test]
-    fn empty_batch_does_not_split_a_component() {
-        let batches = [
-            batch(&[1], &[10], &["A"]),
-            batch(&[], &[], &[]),
-            batch(&[2], &[20], &["A"]),
-        ];
-
-        assert_eq!(
-            component_groups(batches.into_iter()),
-            vec![vec![(1, 10), (2, 20)]]
-        );
-    }
-
     #[test]
     fn chain_collapses_within_its_component_only() {
-        // A chain A -> B -> H, split so the component boundary falls in the
-        // second batch. CCAA is one symbol from CAAA, and CAAA is one symbol from
-        // both CCAA and AAAA. Rows are sorted before the search, so CAAA meets
-        // AAAA, the chain's end, first. The other component is one edge between
-        // two distant UMIs, which has no collapse target. M and N are umi1 and
-        // every other UMI is umi2, so none sits on both sides.
+        // A chain A -> B -> H in component 7. Its rows are interleaved with
+        // component 3, so grouping cannot rely on the row order. CCAA is one
+        // symbol from CAAA, and CAAA is one symbol from both CCAA and AAAA.
+        // Rows are sorted before the search, so CAAA meets AAAA, the chain's
+        // end, first. Component 3 is one edge between two distant UMIs, which
+        // has no collapse target. M and N are umi1 and every other UMI is
+        // umi2, so none sits on both sides.
         let umi_m = umi("GGGG");
         let umi_h = umi("AAAA");
         let umi_a = umi("CCAA");
         let umi_b = umi("CAAA");
         let umi_n = umi("TTTT");
-        let batches = [
-            batch(&[umi_m, umi_m], &[umi_h, umi_a], &["cell", "cell"]),
-            batch(
-                &[umi_m, umi_n, umi("ACAC")],
-                &[umi_b, umi_h, umi("GTGT")],
-                &["cell", "cell", "other"],
-            ),
+        let rows = vec![
+            (7, umi_m, umi_h),
+            (3, umi("ACAC"), umi("GTGT")),
+            (7, umi_m, umi_b),
+            (7, umi_n, umi_h),
+            (7, umi_m, umi_a),
         ];
 
-        let (table, stats) = run_graph_collapse(batches.into_iter().map(Ok), 2, 1, 1).unwrap();
+        let (renames, stats) = run_graph_collapse(rows, 2, 1, 1);
 
-        assert_eq!(
-            collapsed_pairs(&table),
-            HashSet::from_iter([(umi_a, umi_h), (umi_b, umi_h)])
-        );
-        // "cell" has three leaves (A, B and N) and "other" has two. Only the
-        // chain in "cell" finds matches.
+        let mut expected = vec![(7, umi_a, umi_h), (7, umi_b, umi_h)];
+        expected.sort_unstable();
+        assert_eq!(renames, expected);
+        // Component 7 has three leaves (A, B and N) and component 3 has two.
+        // Only the chain in component 7 finds matches.
         assert_eq!(stats.total_components, 2);
         assert_eq!(stats.nodes_considered, 5);
         assert_eq!(stats.targets_found, 2);
@@ -366,23 +277,36 @@ mod tests {
     }
 
     #[test]
-    fn empty_edgelist_returns_an_empty_table() {
-        let (table, stats) = run_graph_collapse(std::iter::empty(), 2, 1, 1).unwrap();
-        let batch = &table.record_batches()[0];
+    fn same_umis_in_two_components_collapse_separately() {
+        // The same leaf chain appears in components 1 and 2. Each component is
+        // its own graph, so each reports its own renames.
+        let umi_m = umi("GGGG");
+        let umi_h = umi("AAAA");
+        let umi_a = umi("CAAA");
+        let umi_n = umi("TTTT");
+        let rows = vec![
+            (2, umi_m, umi_h),
+            (1, umi_m, umi_h),
+            (2, umi_m, umi_a),
+            (1, umi_m, umi_a),
+            (2, umi_n, umi_h),
+            (1, umi_n, umi_h),
+        ];
 
+        let (renames, stats) = run_graph_collapse(rows, 2, 1, 1);
+
+        assert_eq!(renames, vec![(1, umi_a, umi_h), (2, umi_a, umi_h)]);
+        assert_eq!(stats.total_components, 2);
+        assert_eq!(stats.targets_found, 2);
+    }
+
+    #[test]
+    fn empty_edgelist_returns_no_renames() {
+        let (renames, stats) = run_graph_collapse(Vec::new(), 2, 1, 1);
+
+        assert!(renames.is_empty());
         assert_eq!(stats.total_components, 0);
         assert_eq!(stats.nodes_considered, 0);
         assert_eq!(stats.targets_found, 0);
-
-        assert_eq!(batch.num_rows(), 0);
-        assert_eq!(
-            batch
-                .schema()
-                .fields()
-                .iter()
-                .map(|field| field.name().as_str())
-                .collect::<Vec<_>>(),
-            vec!["original", "corrected"]
-        );
     }
 }
