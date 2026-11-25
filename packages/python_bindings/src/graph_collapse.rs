@@ -5,6 +5,8 @@ use pyo3::types::PyDict;
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 
+use itertools::izip;
+
 use pixelator_core::common::graph::Graph;
 use pixelator_core::common::node_indexing::UmiToNodeIndexMapping;
 use pixelator_core::common::types::UMI;
@@ -102,11 +104,8 @@ pub fn py_graph_collapse<'py>(
     }
     // Copied while the GIL is held, so Python cannot change the arrays while
     // the search runs without it.
-    let rows: Vec<EdgelistRow> = component
-        .iter()
-        .zip(umi1.iter())
-        .zip(umi2.iter())
-        .map(|((&component, &umi1), &umi2)| (component, umi1, umi2))
+    let rows: Vec<EdgelistRow> = izip!(component.iter(), umi1.iter(), umi2.iter())
+        .map(|(&component, &umi1, &umi2)| (component, umi1, umi2))
         .collect();
 
     // `graph_collapse` parallelizes on the current Rayon pool. A local pool
