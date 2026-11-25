@@ -1538,6 +1538,7 @@ name = "pixelator_core_py"
 version = "2.0.0"
 dependencies = [
  "flate2",
+ "itertools",
  "log",
  "mimalloc",
  "numpy",

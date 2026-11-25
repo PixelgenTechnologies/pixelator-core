@@ -7,23 +7,23 @@ edition = "2024"
 autobenches = false
 
 [dependencies]
-clap = { version = "4.6.7", features = ["derive"] }
+clap.workspace = true
 sprs = "0.11.6"
 rand = "0.9.5"
-indicatif = { version = "0.18.6", features = ["rayon"] }
+indicatif = { workspace = true, features = ["rayon"] }
 ndarray = "0.16.1"
-rustc-hash = "2.1.3"
+rustc-hash.workspace = true
 csv = "1.4.0"
-env_logger = "0.11.11"
-log = "0.4.34"
+env_logger.workspace = true
+log.workspace = true
 num-traits = "0.2.19"
 is_close = "0.1.3"
-rayon = "1.12.0"
+rayon.workspace = true
 smallvec = "1.15.2"
-itertools = "0.14.0"
+itertools.workspace = true
 parquet = "58.4.0"
 arrow = "58.4.0"
-mimalloc = "0.1.52"
+mimalloc.workspace = true
 paraseq = "0.4.14"
 serde = { version = "1.0.229", features = ["derive"] }
 serde-saphyr = { version = "0.0.27", default-features = false, features = ["deserialize"] }
