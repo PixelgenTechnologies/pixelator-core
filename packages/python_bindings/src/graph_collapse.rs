@@ -115,7 +115,7 @@ pub fn py_graph_collapse<'py>(
         .build()
         .map_err(to_py_err)?;
     let (renames, stats) = py.detach(move || {
-        pool.install(|| run_graph_collapse(rows, bfs_threshold, hamming_threshold, max_degree))
+        pool.install(|| collapse_edgelist(rows, bfs_threshold, hamming_threshold, max_degree))
     });
 
     Ok((renames_to_dict(py, renames)?, stats_to_dict(py, &stats)?))
@@ -128,7 +128,7 @@ pub fn py_graph_collapse<'py>(
 ///
 /// Returns the collapsed UMIs, sorted by component and then original UMI,
 /// together with the stats summed over components.
-fn run_graph_collapse(
+fn collapse_edgelist(
     mut rows: Vec<EdgelistRow>,
     bfs_threshold: u64,
     hamming_threshold: u8,
@@ -261,7 +261,7 @@ mod tests {
             (7, umi_m, umi_a),
         ];
 
-        let (renames, stats) = run_graph_collapse(rows, 2, 1, 1);
+        let (renames, stats) = collapse_edgelist(rows, 2, 1, 1);
 
         let mut expected = vec![(7, umi_a, umi_h), (7, umi_b, umi_h)];
         expected.sort_unstable();
@@ -292,7 +292,7 @@ mod tests {
             (1, umi_n, umi_h),
         ];
 
-        let (renames, stats) = run_graph_collapse(rows, 2, 1, 1);
+        let (renames, stats) = collapse_edgelist(rows, 2, 1, 1);
 
         assert_eq!(renames, vec![(1, umi_a, umi_h), (2, umi_a, umi_h)]);
         assert_eq!(stats.total_components, 2);
@@ -301,7 +301,7 @@ mod tests {
 
     #[test]
     fn empty_edgelist_returns_no_renames() {
-        let (renames, stats) = run_graph_collapse(Vec::new(), 2, 1, 1);
+        let (renames, stats) = collapse_edgelist(Vec::new(), 2, 1, 1);
 
         assert!(renames.is_empty());
         assert_eq!(stats.total_components, 0);
