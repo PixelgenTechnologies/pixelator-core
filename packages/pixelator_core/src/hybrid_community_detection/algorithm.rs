@@ -1,12 +1,11 @@
-use crate::common::cancellation::{CancellationToken, Cancelled};
 use crate::common::graph::Graph;
 use crate::common::graph::GraphProperties;
 use crate::common::node_partitioning::{
     FastNodePartitioning, LeidenNodePartitioning, NodePartitioning,
 };
-use crate::fast_label_propagation::algorithm::fast_label_propagation_cancellable;
+use crate::fast_label_propagation::algorithm::fast_label_propagation;
 use crate::fast_label_propagation::strategies::{AssignmentStrategy, DefaultAssignmentStrategy};
-use crate::leiden::algorithm::leiden_cancellable;
+use crate::leiden::algorithm::leiden;
 use crate::leiden::quality::QualityMetrics;
 use crate::leiden::weighted_partitioned_graph::{
     AggregateOptions, PartitionedGraphStatistics, WeightedPartitionedGraph,
@@ -34,7 +33,7 @@ use log::debug;
 /// * `refine_partitions` — If true, aggregate with [`AggregateOptions::OnlyWellConnected`]
 ///   using `randomness` between FLP and Leiden. If false, aggregate with [`AggregateOptions::All`]
 ///   instead (each partition becomes a single node).
-/// * `multiplet_recovery` — If true, run [`leiden`](crate::leiden::algorithm::leiden) on the aggregated graph. If false, skip
+/// * `multiplet_recovery` — If true, run [`leiden`] on the aggregated graph. If false, skip
 ///   Leiden; `post_leiden_statistics` then reflects the aggregated state without a Leiden pass.
 ///
 /// # Returns
@@ -58,41 +57,6 @@ pub fn hybrid_community_detection(
     PartitionedGraphStatistics,
     PartitionedGraphStatistics,
 ) {
-    hybrid_community_detection_cancellable(
-        graph,
-        quality_function,
-        randomness,
-        seed,
-        max_iteration,
-        flp_epochs,
-        refine_partitions,
-        multiplet_recovery,
-        &CancellationToken::new(),
-    )
-    .expect("a fresh token is never cancelled")
-}
-
-/// Same as [`hybrid_community_detection`], but returns `Err(Cancelled)` soon after `cancel` is
-/// cancelled.
-#[allow(clippy::too_many_arguments)]
-pub fn hybrid_community_detection_cancellable(
-    graph: Graph<u8>,
-    quality_function: impl QualityMetrics,
-    randomness: f64,
-    seed: Option<u64>,
-    max_iteration: Option<usize>,
-    flp_epochs: u64,
-    refine_partitions: bool,
-    multiplet_recovery: bool,
-    cancel: &CancellationToken,
-) -> Result<
-    (
-        LeidenNodePartitioning,
-        PartitionedGraphStatistics,
-        PartitionedGraphStatistics,
-    ),
-    Cancelled,
-> {
     let graph_properties = GraphProperties::new(&graph);
     debug!("Graph properties pre-aggregation: {:?}", graph_properties);
 
@@ -100,13 +64,12 @@ pub fn hybrid_community_detection_cancellable(
         FastNodePartitioning::initialize_with_singlet_partitions(graph.get_num_nodes());
     let assignment_strategy: &dyn AssignmentStrategy<_> = &DefaultAssignmentStrategy;
 
-    let node_partition = fast_label_propagation_cancellable::<FastNodePartitioning>(
+    let node_partition = fast_label_propagation::<FastNodePartitioning>(
         &graph,
         flp_epochs,
         assignment_strategy,
         node_partition,
-        cancel,
-    )?;
+    );
 
     debug!(
         "Completed FLP. {} partitions found.",
@@ -127,7 +90,7 @@ pub fn hybrid_community_detection_cancellable(
     let post_flp_statistics = wp_graph.get_statistics();
 
     if multiplet_recovery {
-        leiden_cancellable(&mut wp_graph, randomness, max_iteration, None, cancel)?;
+        leiden(&mut wp_graph, randomness, max_iteration, None);
     }
     let post_leiden_statistics = wp_graph.get_statistics();
 
@@ -141,11 +104,11 @@ pub fn hybrid_community_detection_cancellable(
         post_leiden_statistics,
     );
 
-    Ok((
+    (
         final_partitioning,
         post_flp_statistics,
         post_leiden_statistics,
-    ))
+    )
 }
 
 #[cfg(test)]
@@ -156,28 +119,6 @@ mod tests {
     use crate::leiden::quality::modularity::Modularity;
 
     use crate::common::test_utils::{get_2_communities_graph, get_example_graph, get_random_graph};
-
-    #[test]
-    fn test_hybrid_community_detection_cancellable_stops_when_cancelled() {
-        let graph = get_example_graph::<u8>();
-        let quality = Modularity::new(0.1, graph.get_total_edge_weight());
-        let cancel = CancellationToken::new();
-        cancel.cancel();
-
-        let result = hybrid_community_detection_cancellable(
-            graph,
-            quality,
-            1.,
-            None,
-            Some(100),
-            1,
-            false,
-            true,
-            &cancel,
-        );
-
-        assert_eq!(result.err(), Some(Cancelled));
-    }
 
     #[test]
     fn test_hybrid_community_detection() {

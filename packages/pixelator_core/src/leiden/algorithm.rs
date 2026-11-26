@@ -1,6 +1,6 @@
 use log::debug;
 
-use crate::common::cancellation::{CancellationToken, Cancelled};
+use crate::common::cancellation::checkpoint;
 use crate::common::node_partitioning::NodePartitioning;
 use crate::common::utils::NodeQueue;
 use crate::leiden::quality::QualityMetrics;
@@ -15,30 +15,10 @@ pub fn leiden<Q: QualityMetrics>(
     max_iteration: Option<usize>,
     threshold_options: Option<ThresholdOptions>,
 ) -> PartitionedGraphStatistics {
-    leiden_cancellable(
-        wp_graph,
-        randomness,
-        max_iteration,
-        threshold_options,
-        &CancellationToken::new(),
-    )
-    .expect("a fresh token is never cancelled")
-}
-
-/// Same as [`leiden`], but returns `Err(Cancelled)` soon after `cancel` is cancelled.
-///
-/// When cancelled, `wp_graph` is left part-way through an iteration and should be discarded.
-pub fn leiden_cancellable<Q: QualityMetrics>(
-    wp_graph: &mut WeightedPartitionedGraph<Q>,
-    randomness: f64,
-    max_iteration: Option<usize>,
-    threshold_options: Option<ThresholdOptions>,
-    cancel: &CancellationToken,
-) -> Result<PartitionedGraphStatistics, Cancelled> {
     let mut it = 0;
     debug!("Starting Leiden algorithm");
     let converged = loop {
-        cancel.check()?;
+        checkpoint();
         if let Some(max_iteration) = max_iteration
             && it >= max_iteration
         {
@@ -48,7 +28,7 @@ pub fn leiden_cancellable<Q: QualityMetrics>(
         }
 
         debug!("Moving nodes fast (iteration {})", it);
-        let delta = move_nodes_fast(wp_graph, cancel)?;
+        let delta = move_nodes_fast(wp_graph);
         debug!(
             "it={}, delta={}, #partitions={}, #nodes={}",
             it,
@@ -78,18 +58,15 @@ pub fn leiden_cancellable<Q: QualityMetrics>(
     debug!("Getting statistics");
     let statistics = wp_graph.get_statistics();
     debug!("Leiden algorithm finished");
-    Ok(statistics)
+    statistics
 }
 
-fn move_nodes_fast<Q: QualityMetrics>(
-    wp_graph: &mut WeightedPartitionedGraph<Q>,
-    cancel: &CancellationToken,
-) -> Result<f64, Cancelled> {
+fn move_nodes_fast<Q: QualityMetrics>(wp_graph: &mut WeightedPartitionedGraph<Q>) -> f64 {
     let mut node_queue = NodeQueue::from((0..wp_graph.get_graph().get_num_nodes()).collect());
     let mut total_delta = 0.;
     let mut aggregated_edge_weights = Vec::new();
     while let Some(node_i) = node_queue.pop_front() {
-        cancel.check()?;
+        checkpoint();
         let maybe_best_community =
             wp_graph.best_community_for_node(node_i, &mut aggregated_edge_weights);
 
@@ -126,7 +103,7 @@ fn move_nodes_fast<Q: QualityMetrics>(
         .get_partitioning_mut()
         .rebuild_partition_to_node_map_if_stale();
 
-    Ok(total_delta)
+    total_delta
 }
 
 pub enum ThresholdOptions {
@@ -423,24 +400,13 @@ mod tests {
     }
 
     #[test]
-    fn test_leiden_cancellable_stops_when_cancelled() {
-        let mut wp_graph = get_triangle_wp_graph();
-        let cancel = CancellationToken::new();
-        cancel.cancel();
-
-        let result = leiden_cancellable(&mut wp_graph, 0.1, None, None, &cancel);
-
-        assert_eq!(result.err(), Some(Cancelled));
-    }
-
-    #[test]
     fn test_move_nodes_fast() {
         let graph = get_example_graph::<usize>();
         let cpm = ConstantPottsModel { resolution: 0.5 };
         let partitioning =
             LeidenNodePartitioning::initialize_with_singlet_partitions(graph.get_num_nodes());
         let mut wp_graph = WeightedPartitionedGraph::new(graph, partitioning, cpm, None, None);
-        move_nodes_fast(&mut wp_graph, &CancellationToken::new()).unwrap();
+        move_nodes_fast(&mut wp_graph);
 
         // I have gone over these results manually to verify that they make sense
         assert_eq!(wp_graph.get_partitioning().num_partitions(), 4);

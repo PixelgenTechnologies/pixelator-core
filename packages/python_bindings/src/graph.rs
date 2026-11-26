@@ -1,9 +1,8 @@
 //! Bindings for graph statistics, connected components, and community detection.
 
-use std::sync::mpsc::{channel, RecvTimeoutError};
 use std::time::Duration;
 
-use pixelator_core::common::cancellation::CancellationToken;
+use pixelator_core::common::cancellation::{run_with, CancellationToken};
 use pixelator_core::common::io::{
     create_graph_and_umi_mapping_from_parquet_file, filter_out_crossing_edges_from_edge_list,
     write_node_partitions_to_parquet,
@@ -14,12 +13,12 @@ use pixelator_core::common::graph::GraphProperties;
 use pixelator_core::common::node_partitioning::{
     FastNodePartitioning, LeidenNodePartitioning, NodePartitioning,
 };
-use pixelator_core::fast_label_propagation::algorithm::fast_label_propagation_cancellable;
+use pixelator_core::fast_label_propagation::algorithm::fast_label_propagation;
 use pixelator_core::fast_label_propagation::strategies::{
     AssignmentStrategy, DefaultAssignmentStrategy,
 };
-use pixelator_core::hybrid_community_detection::algorithm::hybrid_community_detection_cancellable;
-use pixelator_core::leiden::algorithm::{leiden_cancellable, ThresholdOptions};
+use pixelator_core::hybrid_community_detection::algorithm::hybrid_community_detection;
+use pixelator_core::leiden::algorithm::{leiden, ThresholdOptions};
 use pixelator_core::leiden::quality::modularity::Modularity;
 use pixelator_core::leiden::weighted_partitioned_graph::WeightedPartitionedGraph;
 
@@ -35,42 +34,28 @@ const SIGNAL_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 /// Runs `job` on a worker thread with the GIL released, and returns what it produced.
 ///
 /// Meanwhile the calling thread wakes up every [`SIGNAL_CHECK_INTERVAL`] to run Python's
-/// signal handlers. If one raises, e.g. `KeyboardInterrupt` on Ctrl+C, the token passed to
-/// `job` is cancelled, the worker is waited for, and the handler's exception is returned.
+/// signal handlers. If one raises, e.g. `KeyboardInterrupt` on Ctrl+C, the worker's
+/// [`CancellationToken`] is cancelled, the worker is waited for, and the handler's exception is
+/// returned. The algorithms stop at their next [`checkpoint`](pixelator_core::common::cancellation::checkpoint).
 fn detach_io<T: Send>(
     py: Python<'_>,
-    job: impl FnOnce(&CancellationToken) -> Result<T, Box<dyn std::error::Error + Send + Sync>> + Send,
+    job: impl FnOnce() -> Result<T, Box<dyn std::error::Error + Send + Sync>> + Send,
 ) -> PyResult<T> {
     let cancel = CancellationToken::new();
-    let (done_tx, mut done_rx) = channel::<()>();
 
     std::thread::scope(|scope| {
         let worker = {
-            let cancel = &cancel;
+            let cancel = cancel.clone();
             scope.spawn(move || {
                 debug!("Entering detached Rust execution");
-                let res = job(cancel);
+                let res = run_with(cancel, job).unwrap_or_else(|cancelled| Err(cancelled.into()));
                 debug!("Exiting detached Rust execution");
-                let _ = done_tx.send(());
                 res
             })
         };
 
-        loop {
-            // `done_rx` is moved in and handed back because a `&Receiver` is not `Send` and so
-            // cannot be captured by a `detach` closure. A panicking worker drops `done_tx`,
-            // which also ends the wait.
-            let (rx, timed_out) = py.detach(move || {
-                let timed_out = matches!(
-                    done_rx.recv_timeout(SIGNAL_CHECK_INTERVAL),
-                    Err(RecvTimeoutError::Timeout)
-                );
-                (done_rx, timed_out)
-            });
-            done_rx = rx;
-            if !timed_out {
-                break;
-            }
+        while !worker.is_finished() {
+            py.detach(|| std::thread::sleep(SIGNAL_CHECK_INTERVAL));
 
             if let Err(err) = py.check_signals() {
                 cancel.cancel();
@@ -106,7 +91,7 @@ pub fn find_graph_statistics(
     py: Python<'_>,
     parquet_file: &str,
 ) -> PyResult<(usize, usize, usize, f64)> {
-    detach_io(py, |_| {
+    detach_io(py, || {
         let (_, graph) = create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
         let graph_properties = GraphProperties::new(&graph);
 
@@ -211,16 +196,15 @@ pub fn run_hybrid_community_detection(
     PyGraphProperties,
     PyGraphProperties,
 )> {
-    detach_io(py, |cancel| {
+    detach_io(py, || {
         let (umi_mapping, graph) =
             create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
-        cancel.check()?;
         let quality_function = Modularity::new(resolution, graph.get_total_edge_weight());
 
         let pre_recovery_properties = GraphProperties::new(&graph);
 
         let (node_partition, post_flp_statistics, post_leiden_statistics) =
-            hybrid_community_detection_cancellable(
+            hybrid_community_detection(
                 graph,
                 quality_function,
                 randomness,
@@ -229,8 +213,7 @@ pub fn run_hybrid_community_detection(
                 flp_epochs,
                 false,
                 multiplet_recovery,
-                cancel,
-            )?;
+            );
 
         // NB: technically, crossing edges are not removed from the graph until the edge list is saved
         // to parquet. The statistics below are adjusted to exclude such crossing edges.
@@ -274,7 +257,7 @@ pub fn run_connected_components(
     parquet_file: &str,
     output: &str,
 ) -> PyResult<usize> {
-    detach_io(py, |_| {
+    detach_io(py, || {
         let (umi_mapping, graph) =
             create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
 
@@ -309,22 +292,16 @@ pub fn run_label_propagation(
     epochs: u64,
     output: &str,
 ) -> PyResult<usize> {
-    detach_io(py, |cancel| {
+    detach_io(py, || {
         let (umi_mapping, graph) =
             create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
-        cancel.check()?;
 
         let node_partition =
             FastNodePartitioning::initialize_with_singlet_partitions(graph.get_num_nodes());
         let assignment_strategy: &dyn AssignmentStrategy<_> = &DefaultAssignmentStrategy;
 
-        let node_partition = fast_label_propagation_cancellable(
-            &graph,
-            epochs,
-            assignment_strategy,
-            node_partition,
-            cancel,
-        )?;
+        let node_partition =
+            fast_label_propagation(&graph, epochs, assignment_strategy, node_partition);
 
         write_node_partitions_to_parquet(output, &node_partition, &umi_mapping, None)?;
 
@@ -397,10 +374,9 @@ pub fn run_leiden(
         (None, None) => None,
     };
 
-    detach_io(py, |cancel| {
+    detach_io(py, || {
         let (umi_mapping, graph) =
             create_graph_and_umi_mapping_from_parquet_file::<usize>(parquet_file);
-        cancel.check()?;
 
         let partition = if let Some(node_partition_map) = partition {
             LeidenNodePartitioning::initialize_from_partitions(node_partition_map)
@@ -412,13 +388,7 @@ pub fn run_leiden(
         let mut wp_graph =
             WeightedPartitionedGraph::new(graph, partition, quality_function, None, seed);
 
-        leiden_cancellable(
-            &mut wp_graph,
-            randomness,
-            max_iteration,
-            merge_threshold,
-            cancel,
-        )?;
+        leiden(&mut wp_graph, randomness, max_iteration, merge_threshold);
 
         let node_partition = FastNodePartitioning::initialize_from_partitions(
             wp_graph.get_ancestor_to_partition_map(),
