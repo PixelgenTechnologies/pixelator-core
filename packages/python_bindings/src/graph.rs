@@ -1,5 +1,8 @@
 //! Bindings for graph statistics, connected components, and community detection.
 
+use std::time::Duration;
+
+use pixelator_core::common::cancellation::{checkpoint, run_with, CancellationToken};
 use pixelator_core::common::io::{
     create_graph_and_umi_mapping_from_parquet_file, filter_out_crossing_edges_from_edge_list,
     write_node_partitions_to_parquet,
@@ -25,17 +28,49 @@ use rustc_hash::FxHashMap as HashMap;
 
 use paste::paste;
 
+/// How often the calling thread wakes up to let Python handle signals such as Ctrl+C.
+const SIGNAL_CHECK_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Runs `job` on a worker thread with the GIL released, and returns what it produced.
+///
+/// Meanwhile the calling thread wakes up every [`SIGNAL_CHECK_INTERVAL`] to run Python's
+/// signal handlers. If one raises, e.g. `KeyboardInterrupt` on Ctrl+C, the worker's
+/// [`CancellationToken`] is cancelled, the worker is waited for, and the handler's exception is
+/// returned. The algorithms stop at their next [`checkpoint`](pixelator_core::common::cancellation::checkpoint).
 fn detach_io<T: Send>(
     py: Python<'_>,
-    f: impl FnOnce() -> Result<T, Box<dyn std::error::Error + Send + Sync>> + Send,
+    job: impl FnOnce() -> Result<T, Box<dyn std::error::Error + Send + Sync>> + Send,
 ) -> PyResult<T> {
-    py.detach(|| {
-        debug!("Entering detached Rust execution");
-        let res = f();
-        debug!("Exiting detached Rust execution");
-        res
+    let cancel = CancellationToken::new();
+
+    std::thread::scope(|scope| {
+        let worker = {
+            let cancel = cancel.clone();
+            scope.spawn(move || {
+                debug!("Entering detached Rust execution");
+                let res = run_with(cancel, job).unwrap_or_else(|cancelled| Err(cancelled.into()));
+                debug!("Exiting detached Rust execution");
+                res
+            })
+        };
+
+        while !worker.is_finished() {
+            py.detach(|| std::thread::sleep(SIGNAL_CHECK_INTERVAL));
+
+            if let Err(err) = py.check_signals() {
+                cancel.cancel();
+                let _ = py.detach(|| worker.join());
+                return Err(err);
+            }
+        }
+
+        match py.detach(|| worker.join()) {
+            Ok(res) => {
+                res.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{:?}", e)))
+            }
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
     })
-    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{:?}", e)))
 }
 
 ///
@@ -164,6 +199,7 @@ pub fn run_hybrid_community_detection(
     detach_io(py, || {
         let (umi_mapping, graph) =
             create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
+        checkpoint();
         let quality_function = Modularity::new(resolution, graph.get_total_edge_weight());
 
         let pre_recovery_properties = GraphProperties::new(&graph);
@@ -260,6 +296,7 @@ pub fn run_label_propagation(
     detach_io(py, || {
         let (umi_mapping, graph) =
             create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
+        checkpoint();
 
         let node_partition =
             FastNodePartitioning::initialize_with_singlet_partitions(graph.get_num_nodes());
@@ -342,6 +379,7 @@ pub fn run_leiden(
     detach_io(py, || {
         let (umi_mapping, graph) =
             create_graph_and_umi_mapping_from_parquet_file::<usize>(parquet_file);
+        checkpoint();
 
         let partition = if let Some(node_partition_map) = partition {
             LeidenNodePartitioning::initialize_from_partitions(node_partition_map)

@@ -1,5 +1,6 @@
 use log::debug;
 
+use crate::common::cancellation::checkpoint;
 use crate::common::node_partitioning::NodePartitioning;
 use crate::common::utils::NodeQueue;
 use crate::leiden::quality::QualityMetrics;
@@ -17,6 +18,7 @@ pub fn leiden<Q: QualityMetrics>(
     let mut it = 0;
     debug!("Starting Leiden algorithm");
     let converged = loop {
+        checkpoint();
         if let Some(max_iteration) = max_iteration
             && it >= max_iteration
         {
@@ -64,6 +66,7 @@ fn move_nodes_fast<Q: QualityMetrics>(wp_graph: &mut WeightedPartitionedGraph<Q>
     let mut total_delta = 0.;
     let mut aggregated_edge_weights = Vec::new();
     while let Some(node_i) = node_queue.pop_front() {
+        checkpoint();
         let maybe_best_community =
             wp_graph.best_community_for_node(node_i, &mut aggregated_edge_weights);
 

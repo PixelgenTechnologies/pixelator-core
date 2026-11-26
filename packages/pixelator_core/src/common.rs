@@ -1,4 +1,5 @@
 pub mod assay;
+pub mod cancellation;
 pub mod constants;
 pub mod distances;
 pub mod graph;

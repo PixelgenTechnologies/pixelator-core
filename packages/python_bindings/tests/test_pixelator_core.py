@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import logging
+import subprocess
+import sys
+import textwrap
 import threading
 from collections.abc import Callable
 from pathlib import Path
 
 import pixelator_core
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import pytest
 
@@ -33,6 +37,25 @@ def gil_check_parquet_path(tmp_path_factory: pytest.TempPathFactory) -> str:
             {
                 "umi1": pa.array(range(n_rows), type=pa.uint64()),
                 "umi2": pa.array(range(1, n_rows + 1), type=pa.uint64()),
+            }
+        ),
+        synthetic_parquet,
+    )
+    return str(synthetic_parquet)
+
+
+@pytest.fixture(scope="module")
+def interrupt_parquet_path(tmp_path_factory: pytest.TempPathFactory) -> str:
+    """Synthesize a graph that takes Leiden and FLP at least a second to process."""
+    n_nodes = 1_000_000
+    umi1 = pa.array(range(n_nodes), type=pa.uint64())
+    neighbors = [pc.add(umi1, pa.scalar(k, pa.uint64())) for k in (1, 7, 101)]
+    synthetic_parquet = tmp_path_factory.mktemp("interrupt") / "synthetic_edges.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "umi1": pa.concat_arrays([umi1] * len(neighbors)),
+                "umi2": pa.concat_arrays(neighbors),
             }
         ),
         synthetic_parquet,
@@ -330,6 +353,74 @@ def test_pyfunctions_release_gil_during_rust_execution(
     assert worker_ran_before_exit_log, (
         f"background Python thread was starved of the GIL during {name}"
     )
+
+
+_INTERRUPT_SCRIPT = textwrap.dedent(
+    """
+    import logging
+    import os
+    import signal
+    import sys
+
+    import pixelator_core
+
+    parquet_file, output = sys.argv[1], sys.argv[2]
+
+
+    class SendSigintOnEnter(logging.Handler):
+        def emit(self, record):
+            if record.getMessage() == "Entering detached Rust execution":
+                os.kill(os.getpid(), signal.SIGINT)
+
+
+    logger = logging.getLogger("pixelator_core_py")
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(SendSigintOnEnter())
+
+    {call}
+    """
+)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="SIGINT is POSIX-only")
+@pytest.mark.parametrize(
+    "call",
+    [
+        "pixelator_core.run_label_propagation(parquet_file, output=output)",
+        "pixelator_core.run_leiden(parquet_file, resolution=1.0, output=output)",
+        (
+            "pixelator_core.run_hybrid_community_detection("
+            "parquet_file, resolution=1.0, multiplet_recovery=True, output=output)"
+        ),
+    ],
+)
+def test_ctrl_c_interrupts_rust_execution(
+    call: str, interrupt_parquet_path: str, tmp_path: Path
+) -> None:
+    """Verify SIGINT raises `KeyboardInterrupt` and stops the Rust work early.
+
+    The child process sends itself SIGINT as soon as the Rust work starts. The
+    output parquet is written only after the algorithm finishes, so its absence
+    shows the algorithm was cancelled rather than run to completion.
+    """
+    output = tmp_path / "out.parquet"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            _INTERRUPT_SCRIPT.format(call=call),
+            interrupt_parquet_path,
+            str(output),
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode != 0
+    assert "KeyboardInterrupt" in result.stderr
+    assert not output.exists()
 
 
 def test_encode_decode_dna_2bit() -> None:

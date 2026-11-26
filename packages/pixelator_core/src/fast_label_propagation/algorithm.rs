@@ -4,6 +4,7 @@ use rand::seq::SliceRandom;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::common::cancellation::checkpoint;
 use crate::common::graph::Graph;
 use crate::common::node_partitioning::NodePartitioning;
 use crate::common::types::NodeIdx;
@@ -46,6 +47,7 @@ where
     let mut last_iteration = 0usize;
 
     while let Some(node_i) = node_queue.pop_front() {
+        checkpoint();
         iteration += 1;
         if iteration.is_multiple_of(1_000_000) {
             update_progress_bar(
