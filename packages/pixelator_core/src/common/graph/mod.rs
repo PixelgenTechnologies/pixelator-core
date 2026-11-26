@@ -671,7 +671,7 @@ mod tests {
     #[test]
     fn test_connected_components_match_union_find_on_random_graph() {
         use crate::common::test_utils::get_random_graph;
-        use rand::Rng;
+        use rand::RngExt;
         use rand::SeedableRng;
         use rand::rngs::StdRng;
 

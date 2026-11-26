@@ -8,15 +8,15 @@ crate-type = ["cdylib"]
 
 [dependencies]
 paste = "1.0.15"
-numpy = "0.28.0"
+numpy = "0.30.0"
 pixelator-core.workspace = true
-pyo3 = { version = "0.28", features = ["extension-module"] }
-pyo3-log = "0.13.4"
+pyo3 = { version = "0.30", features = ["extension-module"] }
+pyo3-log = "0.13.5"
 rayon.workspace = true
 itertools.workspace = true
 log.workspace = true
 rustc-hash.workspace = true
-flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs"] }
+flate2 = { version = "1.1.11", default-features = false, features = ["zlib-rs"] }
 
 # Not used as the global allocator on macOS. PyArrow ships its own mimalloc, and
 # loading both into one process corrupts per-thread heap pointers. See the

@@ -258,7 +258,7 @@ assay_spec:
     #[test]
     fn seeded_random_umis_are_not_flagged_at_k6() {
         use rand::rngs::StdRng;
-        use rand::{Rng, SeedableRng};
+        use rand::{RngExt, SeedableRng};
 
         const BASES: [u8; 4] = *b"ACGT";
         let s = searcher(6);

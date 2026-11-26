@@ -12,7 +12,7 @@ use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 use crate::common::assay::Region;
 use crate::common::{Assay, Panel};
@@ -64,6 +64,11 @@ impl paraseq::Record for &OwnedRecord {
 
     fn qual(&self) -> Option<&[u8]> {
         Some(self.qual.as_slice())
+    }
+
+    // Generated records have no position in a source file.
+    fn index(&self) -> u64 {
+        0
     }
 }
 

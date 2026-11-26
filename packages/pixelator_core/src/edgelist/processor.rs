@@ -3,7 +3,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 
 use arrow::record_batch::RecordBatch;
-use paraseq::ProcessError;
+use paraseq::Error;
 use paraseq::prelude::*;
 
 use crate::common::{Assay, Panel};
@@ -74,14 +74,14 @@ impl DroppedReadSink {
         }
     }
 
-    fn flush_and_send(&mut self) -> Result<(), ProcessError> {
+    fn flush_and_send(&mut self) -> Result<(), Error> {
         let batch = self
             .buffer
             .flush()
-            .map_err(IntoProcessError::into_process_error)?;
+            .map_err(IntoParaseqError::into_paraseq_error)?;
         self.tx
             .send(batch)
-            .map_err(IntoProcessError::into_process_error)
+            .map_err(IntoParaseqError::into_paraseq_error)
     }
 }
 
@@ -157,19 +157,19 @@ impl RowSink {
         }
     }
 
-    fn flush_and_send(&mut self) -> Result<(), ProcessError> {
+    fn flush_and_send(&mut self) -> Result<(), Error> {
         let batch = self
             .buffer
             .flush()
-            .map_err(IntoProcessError::into_process_error)?;
+            .map_err(IntoParaseqError::into_paraseq_error)?;
         self.tx
             .send(batch)
-            .map_err(IntoProcessError::into_process_error)
+            .map_err(IntoParaseqError::into_paraseq_error)
     }
 
     /// Batch boundary (`on_batch_complete`): publishes progress and flushes each
     /// buffer that has reached its batch threshold.
-    fn finish_batch(&mut self) -> Result<(), ProcessError> {
+    fn finish_batch(&mut self) -> Result<(), Error> {
         self.progress.publish();
         if self.buffer.len() >= self.batch_threshold {
             self.flush_and_send()?;
@@ -185,7 +185,7 @@ impl RowSink {
     /// End of thread (`on_thread_complete`): publishes the last of the progress,
     /// flushes any trailing rows (kept and dropped), and folds this worker's
     /// stats into the shared tally.
-    fn finish_thread(&mut self) -> Result<(), ProcessError> {
+    fn finish_thread(&mut self) -> Result<(), Error> {
         self.progress.publish();
         if !self.buffer.is_empty() {
             self.flush_and_send()?;
@@ -258,16 +258,16 @@ impl PairedProcessor {
 }
 
 impl<Rf: Record> PairedParallelProcessor<Rf> for PairedProcessor {
-    fn process_record_pair(&mut self, r1: Rf, r2: Rf) -> Result<(), ProcessError> {
+    fn process_record_pair(&mut self, r1: Rf, r2: Rf) -> Result<(), Error> {
         self.sink.process(Read::Paired { r1: &r1, r2: &r2 });
         Ok(())
     }
 
-    fn on_batch_complete(&mut self) -> Result<(), ProcessError> {
+    fn on_batch_complete(&mut self) -> Result<(), Error> {
         self.sink.finish_batch()
     }
 
-    fn on_thread_complete(&mut self) -> Result<(), ProcessError> {
+    fn on_thread_complete(&mut self) -> Result<(), Error> {
         self.sink.finish_thread()
     }
 }
@@ -326,7 +326,7 @@ impl SingleProcessor {
 }
 
 impl<Rf: Record> ParallelProcessor<Rf> for SingleProcessor {
-    fn process_record(&mut self, r: Rf) -> Result<(), ProcessError> {
+    fn process_record(&mut self, r: Rf) -> Result<(), Error> {
         let read = match self.strand {
             Strand::Forward => Read::SingleForward(&r),
             Strand::Reverse => Read::SingleReverse(&r),
@@ -335,11 +335,11 @@ impl<Rf: Record> ParallelProcessor<Rf> for SingleProcessor {
         Ok(())
     }
 
-    fn on_batch_complete(&mut self) -> Result<(), ProcessError> {
+    fn on_batch_complete(&mut self) -> Result<(), Error> {
         self.sink.finish_batch()
     }
 
-    fn on_thread_complete(&mut self) -> Result<(), ProcessError> {
+    fn on_thread_complete(&mut self) -> Result<(), Error> {
         self.sink.finish_thread()
     }
 }

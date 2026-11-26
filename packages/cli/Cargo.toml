@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 clap.workspace = true
-rand = "0.10.3"
+rand = "0.10.4"
 indicatif.workspace = true
 pixelator-core.workspace = true
 env_logger.workspace = true

@@ -9,7 +9,7 @@ use rand::Rng;
 use rand::SeedableRng;
 use rand::distr::Distribution;
 use rand::distr::weighted::WeightedIndex;
-use rand::rngs::StdRng;
+use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::fmt;
@@ -161,7 +161,7 @@ pub struct WeightedPartitionedGraph<Q: QualityMetrics> {
     /// maps from ancestor node ids to current node ids
     /// which will change as the graph is aggregated
     ancestor_map: Vec<NodeIdx>,
-    rng: StdRng,
+    rng: SmallRng,
 }
 
 impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
@@ -208,7 +208,7 @@ impl<Q: QualityMetrics> WeightedPartitionedGraph<Q> {
         );
 
         let ancestor_map = (0..graph.get_num_nodes()).collect::<Vec<NodeIdx>>();
-        let rng = StdRng::seed_from_u64(seed.unwrap_or(0));
+        let rng = SmallRng::seed_from_u64(seed.unwrap_or(0));
 
         WeightedPartitionedGraph {
             graph,
@@ -901,15 +901,19 @@ mod tests {
         // start from - looking at the example graph it does seem to be a reasonable result,
         // partitioning the nodes that have a high connectivity inside the subset into
         // one partition.
-        let partitioning = wp_graph.get_partitioning();
-        assert_eq!(partitioning.num_partitions(), 7);
-
-        // This test is not deterministic, but these solutions seem to be the options
-        assert!(
-            partitioning.get_node_to_partition_map() == vec![0, 1, 2, 3, 5, 5, 6, 5, 5]
-                || partitioning.get_node_to_partition_map() == vec![0, 1, 2, 3, 4, 5, 6, 5, 4]
-                || partitioning.get_node_to_partition_map() == vec![0, 1, 2, 3, 4, 5, 6, 4, 5],
-        );
+        // The outcome depends on the random visiting order, and partition ids depend on
+        // which node moves first. Across seeds, the same structure always results, so
+        // assert on that rather than on the ids:
+        // - nodes 0-3 and 6 stay in their own partitions,
+        // - nodes 4, 5, 7 and 8 either all merge, or form two pairs that never join 4 with 5.
+        let map = wp_graph.get_partitioning().get_node_to_partition_map();
+        let same = |a: usize, b: usize| map[a] == map[b];
+        assert_eq!(map[..4], [0, 1, 2, 3]);
+        assert_eq!(map[6], 6);
+        let all_merged = same(4, 5) && same(4, 7) && same(4, 8);
+        let pairs_4_7_and_5_8 = same(4, 7) && same(5, 8) && !same(4, 5);
+        let pairs_4_8_and_5_7 = same(4, 8) && same(5, 7) && !same(4, 5);
+        assert!(all_merged || pairs_4_7_and_5_8 || pairs_4_8_and_5_7);
     }
 
     #[test]
