@@ -1,9 +1,9 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `packages/pixelator_core/src/edgelist/processor.rs`."><title>processor.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-0c87338a.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="pixelator_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.99.1 (58cf8f9c3 2026-10-13)" data-channel="1.99.1" data-search-js="search-cf4fc35e.js" data-stringdex-js="stringdex-b5109af9.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-9f56287d.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">pixelator_core/edgelist/</div>processor.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span>std::sync::atomic::{AtomicU64, Ordering};
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `packages/pixelator_core/src/edgelist/processor.rs`."><title>processor.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-203241e4.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="pixelator_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.100.0 (0ef1bc386 2026-11-09)" data-channel="1.100.0" data-search-js="search-b167f383.js" data-stringdex-js="stringdex-b5109af9.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-1814ead3.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-9f56287d.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">pixelator_core/edgelist/</div>processor.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span>std::sync::atomic::{AtomicU64, Ordering};
 <a href=#2 id=2 data-nosnippet>2</a><span class="kw">use </span>std::sync::mpsc::SyncSender;
 <a href=#3 id=3 data-nosnippet>3</a><span class="kw">use </span>std::sync::{Arc, Mutex};
 <a href=#4 id=4 data-nosnippet>4</a>
 <a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span>arrow::record_batch::RecordBatch;
-<a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>paraseq::ProcessError;
+<a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>paraseq::Error;
 <a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>paraseq::prelude::<span class="kw-2">*</span>;
 <a href=#8 id=8 data-nosnippet>8</a>
 <a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span><span class="kw">crate</span>::common::{Assay, Panel};
@@ -74,14 +74,14 @@
 <a href=#74 id=74 data-nosnippet>74</a>        }
 <a href=#75 id=75 data-nosnippet>75</a>    }
 <a href=#76 id=76 data-nosnippet>76</a>
-<a href=#77 id=77 data-nosnippet>77</a>    <span class="kw">fn </span>flush_and_send(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;(), ProcessError&gt; {
+<a href=#77 id=77 data-nosnippet>77</a>    <span class="kw">fn </span>flush_and_send(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;(), Error&gt; {
 <a href=#78 id=78 data-nosnippet>78</a>        <span class="kw">let </span>batch = <span class="self">self
 <a href=#79 id=79 data-nosnippet>79</a>            </span>.buffer
 <a href=#80 id=80 data-nosnippet>80</a>            .flush()
-<a href=#81 id=81 data-nosnippet>81</a>            .map_err(IntoProcessError::into_process_error)<span class="question-mark">?</span>;
+<a href=#81 id=81 data-nosnippet>81</a>            .map_err(IntoParaseqError::into_paraseq_error)<span class="question-mark">?</span>;
 <a href=#82 id=82 data-nosnippet>82</a>        <span class="self">self</span>.tx
 <a href=#83 id=83 data-nosnippet>83</a>            .send(batch)
-<a href=#84 id=84 data-nosnippet>84</a>            .map_err(IntoProcessError::into_process_error)
+<a href=#84 id=84 data-nosnippet>84</a>            .map_err(IntoParaseqError::into_paraseq_error)
 <a href=#85 id=85 data-nosnippet>85</a>    }
 <a href=#86 id=86 data-nosnippet>86</a>}
 <a href=#87 id=87 data-nosnippet>87</a>
@@ -157,19 +157,19 @@
 <a href=#157 id=157 data-nosnippet>157</a>        }
 <a href=#158 id=158 data-nosnippet>158</a>    }
 <a href=#159 id=159 data-nosnippet>159</a>
-<a href=#160 id=160 data-nosnippet>160</a>    <span class="kw">fn </span>flush_and_send(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;(), ProcessError&gt; {
+<a href=#160 id=160 data-nosnippet>160</a>    <span class="kw">fn </span>flush_and_send(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;(), Error&gt; {
 <a href=#161 id=161 data-nosnippet>161</a>        <span class="kw">let </span>batch = <span class="self">self
 <a href=#162 id=162 data-nosnippet>162</a>            </span>.buffer
 <a href=#163 id=163 data-nosnippet>163</a>            .flush()
-<a href=#164 id=164 data-nosnippet>164</a>            .map_err(IntoProcessError::into_process_error)<span class="question-mark">?</span>;
+<a href=#164 id=164 data-nosnippet>164</a>            .map_err(IntoParaseqError::into_paraseq_error)<span class="question-mark">?</span>;
 <a href=#165 id=165 data-nosnippet>165</a>        <span class="self">self</span>.tx
 <a href=#166 id=166 data-nosnippet>166</a>            .send(batch)
-<a href=#167 id=167 data-nosnippet>167</a>            .map_err(IntoProcessError::into_process_error)
+<a href=#167 id=167 data-nosnippet>167</a>            .map_err(IntoParaseqError::into_paraseq_error)
 <a href=#168 id=168 data-nosnippet>168</a>    }
 <a href=#169 id=169 data-nosnippet>169</a>
 <a href=#170 id=170 data-nosnippet>170</a>    <span class="doccomment">/// Batch boundary (`on_batch_complete`): publishes progress and flushes each
 <a href=#171 id=171 data-nosnippet>171</a>    /// buffer that has reached its batch threshold.
-<a href=#172 id=172 data-nosnippet>172</a>    </span><span class="kw">fn </span>finish_batch(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;(), ProcessError&gt; {
+<a href=#172 id=172 data-nosnippet>172</a>    </span><span class="kw">fn </span>finish_batch(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;(), Error&gt; {
 <a href=#173 id=173 data-nosnippet>173</a>        <span class="self">self</span>.progress.publish();
 <a href=#174 id=174 data-nosnippet>174</a>        <span class="kw">if </span><span class="self">self</span>.buffer.len() &gt;= <span class="self">self</span>.batch_threshold {
 <a href=#175 id=175 data-nosnippet>175</a>            <span class="self">self</span>.flush_and_send()<span class="question-mark">?</span>;
@@ -185,7 +185,7 @@
 <a href=#185 id=185 data-nosnippet>185</a>    <span class="doccomment">/// End of thread (`on_thread_complete`): publishes the last of the progress,
 <a href=#186 id=186 data-nosnippet>186</a>    /// flushes any trailing rows (kept and dropped), and folds this worker's
 <a href=#187 id=187 data-nosnippet>187</a>    /// stats into the shared tally.
-<a href=#188 id=188 data-nosnippet>188</a>    </span><span class="kw">fn </span>finish_thread(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;(), ProcessError&gt; {
+<a href=#188 id=188 data-nosnippet>188</a>    </span><span class="kw">fn </span>finish_thread(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;(), Error&gt; {
 <a href=#189 id=189 data-nosnippet>189</a>        <span class="self">self</span>.progress.publish();
 <a href=#190 id=190 data-nosnippet>190</a>        <span class="kw">if </span>!<span class="self">self</span>.buffer.is_empty() {
 <a href=#191 id=191 data-nosnippet>191</a>            <span class="self">self</span>.flush_and_send()<span class="question-mark">?</span>;
@@ -258,16 +258,16 @@
 <a href=#258 id=258 data-nosnippet>258</a>}
 <a href=#259 id=259 data-nosnippet>259</a>
 <a href=#260 id=260 data-nosnippet>260</a><span class="kw">impl</span>&lt;Rf: Record&gt; PairedParallelProcessor&lt;Rf&gt; <span class="kw">for </span>PairedProcessor {
-<a href=#261 id=261 data-nosnippet>261</a>    <span class="kw">fn </span>process_record_pair(<span class="kw-2">&amp;mut </span><span class="self">self</span>, r1: Rf, r2: Rf) -&gt; <span class="prelude-ty">Result</span>&lt;(), ProcessError&gt; {
+<a href=#261 id=261 data-nosnippet>261</a>    <span class="kw">fn </span>process_record_pair(<span class="kw-2">&amp;mut </span><span class="self">self</span>, r1: Rf, r2: Rf) -&gt; <span class="prelude-ty">Result</span>&lt;(), Error&gt; {
 <a href=#262 id=262 data-nosnippet>262</a>        <span class="self">self</span>.sink.process(Read::Paired { r1: <span class="kw-2">&amp;</span>r1, r2: <span class="kw-2">&amp;</span>r2 });
 <a href=#263 id=263 data-nosnippet>263</a>        <span class="prelude-val">Ok</span>(())
 <a href=#264 id=264 data-nosnippet>264</a>    }
 <a href=#265 id=265 data-nosnippet>265</a>
-<a href=#266 id=266 data-nosnippet>266</a>    <span class="kw">fn </span>on_batch_complete(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;(), ProcessError&gt; {
+<a href=#266 id=266 data-nosnippet>266</a>    <span class="kw">fn </span>on_batch_complete(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;(), Error&gt; {
 <a href=#267 id=267 data-nosnippet>267</a>        <span class="self">self</span>.sink.finish_batch()
 <a href=#268 id=268 data-nosnippet>268</a>    }
 <a href=#269 id=269 data-nosnippet>269</a>
-<a href=#270 id=270 data-nosnippet>270</a>    <span class="kw">fn </span>on_thread_complete(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;(), ProcessError&gt; {
+<a href=#270 id=270 data-nosnippet>270</a>    <span class="kw">fn </span>on_thread_complete(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;(), Error&gt; {
 <a href=#271 id=271 data-nosnippet>271</a>        <span class="self">self</span>.sink.finish_thread()
 <a href=#272 id=272 data-nosnippet>272</a>    }
 <a href=#273 id=273 data-nosnippet>273</a>}
@@ -326,7 +326,7 @@
 <a href=#326 id=326 data-nosnippet>326</a>}
 <a href=#327 id=327 data-nosnippet>327</a>
 <a href=#328 id=328 data-nosnippet>328</a><span class="kw">impl</span>&lt;Rf: Record&gt; ParallelProcessor&lt;Rf&gt; <span class="kw">for </span>SingleProcessor {
-<a href=#329 id=329 data-nosnippet>329</a>    <span class="kw">fn </span>process_record(<span class="kw-2">&amp;mut </span><span class="self">self</span>, r: Rf) -&gt; <span class="prelude-ty">Result</span>&lt;(), ProcessError&gt; {
+<a href=#329 id=329 data-nosnippet>329</a>    <span class="kw">fn </span>process_record(<span class="kw-2">&amp;mut </span><span class="self">self</span>, r: Rf) -&gt; <span class="prelude-ty">Result</span>&lt;(), Error&gt; {
 <a href=#330 id=330 data-nosnippet>330</a>        <span class="kw">let </span>read = <span class="kw">match </span><span class="self">self</span>.strand {
 <a href=#331 id=331 data-nosnippet>331</a>            Strand::Forward =&gt; Read::SingleForward(<span class="kw-2">&amp;</span>r),
 <a href=#332 id=332 data-nosnippet>332</a>            Strand::Reverse =&gt; Read::SingleReverse(<span class="kw-2">&amp;</span>r),
@@ -335,11 +335,11 @@
 <a href=#335 id=335 data-nosnippet>335</a>        <span class="prelude-val">Ok</span>(())
 <a href=#336 id=336 data-nosnippet>336</a>    }
 <a href=#337 id=337 data-nosnippet>337</a>
-<a href=#338 id=338 data-nosnippet>338</a>    <span class="kw">fn </span>on_batch_complete(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;(), ProcessError&gt; {
+<a href=#338 id=338 data-nosnippet>338</a>    <span class="kw">fn </span>on_batch_complete(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;(), Error&gt; {
 <a href=#339 id=339 data-nosnippet>339</a>        <span class="self">self</span>.sink.finish_batch()
 <a href=#340 id=340 data-nosnippet>340</a>    }
 <a href=#341 id=341 data-nosnippet>341</a>
-<a href=#342 id=342 data-nosnippet>342</a>    <span class="kw">fn </span>on_thread_complete(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;(), ProcessError&gt; {
+<a href=#342 id=342 data-nosnippet>342</a>    <span class="kw">fn </span>on_thread_complete(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;(), Error&gt; {
 <a href=#343 id=343 data-nosnippet>343</a>        <span class="self">self</span>.sink.finish_thread()
 <a href=#344 id=344 data-nosnippet>344</a>    }
 <a href=#345 id=345 data-nosnippet>345</a>}
