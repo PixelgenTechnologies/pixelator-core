@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use pixelator_core::common::cancellation::{run_with, CancellationToken};
+use pixelator_core::common::cancellation::{checkpoint, run_with, CancellationToken};
 use pixelator_core::common::io::{
     create_graph_and_umi_mapping_from_parquet_file, filter_out_crossing_edges_from_edge_list,
     write_node_partitions_to_parquet,
@@ -199,6 +199,7 @@ pub fn run_hybrid_community_detection(
     detach_io(py, || {
         let (umi_mapping, graph) =
             create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
+        checkpoint();
         let quality_function = Modularity::new(resolution, graph.get_total_edge_weight());
 
         let pre_recovery_properties = GraphProperties::new(&graph);
@@ -295,6 +296,7 @@ pub fn run_label_propagation(
     detach_io(py, || {
         let (umi_mapping, graph) =
             create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
+        checkpoint();
 
         let node_partition =
             FastNodePartitioning::initialize_with_singlet_partitions(graph.get_num_nodes());
@@ -377,6 +379,7 @@ pub fn run_leiden(
     detach_io(py, || {
         let (umi_mapping, graph) =
             create_graph_and_umi_mapping_from_parquet_file::<usize>(parquet_file);
+        checkpoint();
 
         let partition = if let Some(node_partition_map) = partition {
             LeidenNodePartitioning::initialize_from_partitions(node_partition_map)
