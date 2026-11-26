@@ -21,4 +21,4 @@ pub use strand::Strand;
 
 // Narrower than its neighbours: the resolved offsets are an internal detail
 // shared between pipeline stages, not part of the crate's surface.
-pub(crate) use layout::RegionLayout;
+pub(crate) use layout::{RegionLayout, SideBounds};
