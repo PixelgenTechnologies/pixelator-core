@@ -5,6 +5,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0](https://github.com/PixelgenTechnologies/pixelator-core/compare/v2.0.0...v3.0.0) (2026-11-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* make graph-collapse work on batched components. ([#53](https://github.com/PixelgenTechnologies/pixelator-core/issues/53))
+
+### Features
+
+* Enable ctrl+c termination in graph commands ([#57](https://github.com/PixelgenTechnologies/pixelator-core/issues/57)) ([90992fc](https://github.com/PixelgenTechnologies/pixelator-core/commit/90992fcdd4c8dcbec6ff28ddd890613b9dbf090f))
+* make graph-collapse work on batched components. ([#53](https://github.com/PixelgenTechnologies/pixelator-core/issues/53)) ([a5cc337](https://github.com/PixelgenTechnologies/pixelator-core/commit/a5cc3372c7b33e34990ee3bec771100e62178165))
+
+
+### Bug Fixes
+
+* **deps:** bump cc to 1.11.1 to fix Windows wheel build ([#61](https://github.com/PixelgenTechnologies/pixelator-core/issues/61)) ([399d933](https://github.com/PixelgenTechnologies/pixelator-core/commit/399d933032d8303905c3599efa1802bdc7801991))
+
 ## [2.0.0](https://github.com/PixelgenTechnologies/pixelator-core/compare/v1.0.2...v2.0.0) (2026-11-18)
 
 

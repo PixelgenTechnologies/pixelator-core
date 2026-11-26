@@ -5,7 +5,7 @@ resolver = "3"
 # Single source of truth for Rust crates and Python wheels (maturin reads this via the crate).
 # Prereleases use Cargo semver (e.g. 0.1.0-rc1); PEP 440 treats that as the same release as 0.1.0rc1.
 [workspace.package]
-version = "2.0.0"
+version = "3.0.0"
 
 # Dependencies used by more than one member. Members opt in with `dep.workspace = true`
 # and may add features on top (e.g. `indicatif` with `rayon` in pixelator-core).
