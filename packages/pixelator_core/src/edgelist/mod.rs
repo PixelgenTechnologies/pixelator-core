@@ -183,6 +183,8 @@ fn spawn_parquet_writer(
 
 #[cfg(test)]
 mod tests {
+    mod gzip_bomb_tests;
+
     use std::fs::File;
     use std::io::Cursor;
 

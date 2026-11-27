@@ -37,6 +37,7 @@ test-fixtures = []
 
 [dev-dependencies]
 divan = "0.1.21"
+flate2 = { version = "1.1.11", default-features = false, features = ["zlib-rs"] }
 tempfile = "3.27.0"
 # Benches are not `cfg(test)`, so they reach `test_fixtures` through this feature.
 pixelator-core = { path = ".", features = ["test-fixtures"] }
