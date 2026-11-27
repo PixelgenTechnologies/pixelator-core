@@ -106,19 +106,24 @@ fn move_nodes_fast<Q: QualityMetrics>(wp_graph: &mut WeightedPartitionedGraph<Q>
     total_delta
 }
 
+#[derive(Clone, Copy)]
 pub enum ThresholdOptions {
     Absolute(usize),
     Relative(f64),
+    Sqrt(f64),
 }
 
 /// Merge nodes connected by strong edges
 ///
-/// The threshold to identify such edges can either be specified in two ways:
+/// The threshold to identify such edges can either be specified in three ways:
 /// - in terms of absolute number of edges, e.g. any two partitions with more than X edges between
 ///   them will be merged
 /// - in terms of number of edges relative to the size of the smallest of the two partitions, e.g.
 ///   if any two partitions will be merged if there are connected by more than more than X edges per
 ///   umis in the smallest partition
+/// - in terms of number of edges relative to the square root of the size of the smallest of the
+///   two partitions, e.g. any two partitions connected by more than X edges per square root of
+///   the node weight of the smallest partition will be merged
 ///
 /// Every node must be in its own partition when this is called, so that merging strongly
 /// connected nodes is the same as merging partitions.
@@ -140,6 +145,11 @@ fn merge_highly_connected_nodes<Q: QualityMetrics>(
             graph.get_edge_weight(node_1, node_2).unwrap() as f64
                 > rt * min(node_weights[node_1], node_weights[node_2]) as f64
         }
+        ThresholdOptions::Sqrt(k) => {
+            let node_weights = wp_graph.get_node_weights();
+            graph.get_edge_weight(node_1, node_2).unwrap() as f64
+                > k * (min(node_weights[node_1], node_weights[node_2]) as f64).sqrt()
+        }
     });
 
     // As many components as nodes means no strong edges: nothing to merge.
@@ -160,6 +170,26 @@ fn merge_highly_connected_nodes<Q: QualityMetrics>(
         .rebuild_partition_to_node_map_if_stale();
 
     wp_graph.aggregate(AggregateOptions::All);
+}
+
+/// Merge nodes connected by strong edges, again and again, until a round merges nothing.
+///
+/// Every round contracts the nodes it merged, so the next round applies the threshold to the
+/// node weights and edge weights of the merged nodes.
+///
+/// Every node must be in its own partition when this is called.
+pub fn merge_highly_connected_nodes_until_stable<Q: QualityMetrics>(
+    wp_graph: &mut WeightedPartitionedGraph<Q>,
+    merge_threshold: ThresholdOptions,
+) {
+    loop {
+        checkpoint();
+        let nodes_before = wp_graph.get_graph().get_num_nodes();
+        merge_highly_connected_nodes(wp_graph, merge_threshold);
+        if wp_graph.get_graph().get_num_nodes() == nodes_before {
+            break;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -483,6 +513,93 @@ mod tests {
         assert_eq!(wp_graph.get_graph().get_num_nodes(), 2);
         assert_eq!(wp_graph.get_graph().get_total_edge_weight(), 25);
         assert_eq!(wp_graph.get_graph().get_edge_weight(0, 1), Some(10));
+    }
+
+    /// Two nodes of weight 4 and 100 joined by an edge of weight 3: `sqrt(min) = 2`.
+    fn get_sqrt_pair_wp_graph() -> WeightedPartitionedGraph<ConstantPottsModel> {
+        let graph = Graph::<usize>::from_edges(vec![Edge::new(0, 1, Some(3))].into_iter(), 2);
+        let partitioning = LeidenNodePartitioning::initialize_with_singlet_partitions(2);
+        let cpm = ConstantPottsModel { resolution: 0.0 };
+        WeightedPartitionedGraph::new(graph, partitioning, cpm, Some(vec![4, 100]), None)
+    }
+
+    #[test]
+    fn test_merge_highly_connected_nodes_sqrt_merges_above_threshold() {
+        let mut wp_graph = get_sqrt_pair_wp_graph();
+
+        // 3 > 1 * sqrt(4)
+        merge_highly_connected_nodes(&mut wp_graph, ThresholdOptions::Sqrt(1.));
+
+        assert_eq!(wp_graph.get_graph().get_num_nodes(), 1);
+        assert_eq!(wp_graph.get_node_weights(), &vec![104]);
+    }
+
+    #[test]
+    fn test_merge_highly_connected_nodes_sqrt_keeps_below_threshold() {
+        let mut wp_graph = get_sqrt_pair_wp_graph();
+
+        // 3 < 2 * sqrt(4)
+        merge_highly_connected_nodes(&mut wp_graph, ThresholdOptions::Sqrt(2.));
+
+        assert_eq!(wp_graph.get_graph().get_num_nodes(), 2);
+    }
+
+    #[test]
+    fn test_merge_highly_connected_nodes_sqrt_is_strict_at_the_threshold() {
+        let mut wp_graph = get_sqrt_pair_wp_graph();
+
+        // 3 == 1.5 * sqrt(4)
+        merge_highly_connected_nodes(&mut wp_graph, ThresholdOptions::Sqrt(1.5));
+
+        assert_eq!(wp_graph.get_graph().get_num_nodes(), 2);
+    }
+
+    /// Nodes 0 and 1 (weight 4 each) share an edge of weight 5, and each has an edge of weight 3
+    /// to node 2 (weight 100). With `k = 2` only 0 and 1 merge at first (5 > 4, 3 < 4). The
+    /// merged node has weight 8 and an edge of weight 6 to node 2, and 6 > 2 * sqrt(8).
+    fn get_sqrt_two_round_wp_graph() -> WeightedPartitionedGraph<ConstantPottsModel> {
+        let edges = vec![
+            Edge::new(0, 1, Some(5)),
+            Edge::new(0, 2, Some(3)),
+            Edge::new(1, 2, Some(3)),
+        ];
+        let graph = Graph::<usize>::from_edges(edges.into_iter(), 3);
+        let partitioning = LeidenNodePartitioning::initialize_with_singlet_partitions(3);
+        let cpm = ConstantPottsModel { resolution: 0.0 };
+        WeightedPartitionedGraph::new(graph, partitioning, cpm, Some(vec![4, 4, 100]), None)
+    }
+
+    #[test]
+    fn test_merge_highly_connected_nodes_sqrt_one_round() {
+        let mut wp_graph = get_sqrt_two_round_wp_graph();
+
+        merge_highly_connected_nodes(&mut wp_graph, ThresholdOptions::Sqrt(2.));
+
+        assert_eq!(wp_graph.get_graph().get_num_nodes(), 2);
+        assert_eq!(wp_graph.get_graph().get_edge_weight(0, 1), Some(6));
+        let ancestors = wp_graph.get_ancestor_to_partition_map();
+        assert_eq!(ancestors[0], ancestors[1]);
+        assert_ne!(ancestors[0], ancestors[2]);
+    }
+
+    #[test]
+    fn test_merge_highly_connected_nodes_until_stable_repeats() {
+        let mut wp_graph = get_sqrt_two_round_wp_graph();
+
+        merge_highly_connected_nodes_until_stable(&mut wp_graph, ThresholdOptions::Sqrt(2.));
+
+        assert_eq!(wp_graph.get_graph().get_num_nodes(), 1);
+        assert_eq!(wp_graph.get_node_weights(), &vec![108]);
+        assert_eq!(wp_graph.get_ancestor_to_partition_map(), vec![0, 0, 0]);
+    }
+
+    #[test]
+    fn test_merge_highly_connected_nodes_until_stable_without_strong_edges() {
+        let mut wp_graph = get_sqrt_two_round_wp_graph();
+
+        merge_highly_connected_nodes_until_stable(&mut wp_graph, ThresholdOptions::Sqrt(10.));
+
+        assert_eq!(wp_graph.get_graph().get_num_nodes(), 3);
     }
 
     #[test]
