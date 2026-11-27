@@ -302,7 +302,7 @@ where
     // weights. This avoids a second undirected buffer at peak construction memory.
     triplets.dedup_by(|later, earlier| {
         if later.0 == earlier.0 && later.1 == earlier.1 {
-            earlier.2 = earlier.2 + later.2;
+            earlier.2 = earlier.2.merge_duplicate(later.2);
             true
         } else {
             false
@@ -350,23 +350,6 @@ where
     CsMat::new((num_nodes, num_nodes), indptr, indices, data)
 }
 
-impl From<Graph<u8>> for Graph<usize> {
-    fn from(graph: Graph<u8>) -> Graph<usize> {
-        let shape = graph.adjacency_matrix.shape();
-        let indptr = graph.adjacency_matrix.indptr();
-        let indices = graph.adjacency_matrix.indices();
-        let data = graph.adjacency_matrix.data();
-        let adjacency_matrix = CsMat::new(
-            shape,
-            indptr.as_slice().unwrap().into(),
-            indices.into(),
-            data.iter().map(|&v| v as usize).collect(),
-        );
-
-        Graph::<usize>::from_adjacency_matrix(adjacency_matrix)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -388,6 +371,23 @@ mod tests {
         let graph = Graph::<u8>::from_edges(edges.into_iter(), 3);
         assert_eq!(graph.get_edge_entry_count(), 4);
         assert_eq!(graph.get_total_edge_weight(), 5);
+    }
+
+    #[test]
+    fn test_duplicate_edges_do_not_wrap() {
+        let pairs = std::iter::repeat_n((0, 1), 200)
+            .chain(std::iter::repeat_n((1, 0), 100))
+            .chain(std::iter::repeat_n((1, 2), 256));
+
+        let graph_usize = Graph::<usize>::from_edges(edges_from_tuples(pairs.clone()), 3);
+        assert_eq!(graph_usize.get_edge_weight(0, 1), Some(300));
+        assert_eq!(graph_usize.get_edge_weight(1, 2), Some(256));
+        assert_eq!(graph_usize.get_total_edge_weight(), 556);
+
+        let graph_u8 = Graph::<u8>::from_edges(edges_from_tuples(pairs), 3);
+        assert_eq!(graph_u8.get_edge_weight(0, 1), Some(u8::MAX));
+        assert_eq!(graph_u8.get_edge_weight(1, 2), Some(u8::MAX));
+        assert_eq!(graph_u8.connected_components(), vec![0, 0, 0]);
     }
 
     #[test]

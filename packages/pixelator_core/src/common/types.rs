@@ -22,9 +22,26 @@ pub type PartitionId = usize;
 pub trait EdgeWeight:
     Into<usize> + Num + Clone + Copy + Default + Add + Sum + std::fmt::Debug
 {
+    /// Combine the weights of two copies of the same edge without wrapping.
+    fn merge_duplicate(self, other: Self) -> Self;
 }
-impl EdgeWeight for u8 {}
-impl EdgeWeight for usize {}
+
+/// `u8` weights only suit algorithms that walk the topology and ignore weights
+/// (connected components, label propagation, graph collapse). Merged counts
+/// saturate at `u8::MAX`, so anything that reads weights or their total (graph
+/// statistics, modularity, Leiden) must build a `Graph<usize>` instead.
+impl EdgeWeight for u8 {
+    fn merge_duplicate(self, other: Self) -> Self {
+        self.saturating_add(other)
+    }
+}
+
+impl EdgeWeight for usize {
+    fn merge_duplicate(self, other: Self) -> Self {
+        self.checked_add(other)
+            .expect("duplicate edge weight overflowed usize")
+    }
+}
 
 /// Represents a weighted edge in a graph.
 ///
