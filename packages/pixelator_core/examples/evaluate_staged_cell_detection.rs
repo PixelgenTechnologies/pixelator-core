@@ -540,6 +540,7 @@ fn oracle_bucket(size: u32) -> usize {
 
 /// One pair of adjacent groups.
 struct OraclePair {
+    groups: (u32, u32),
     /// Node count of the smaller group.
     min_size: u32,
     /// `cut / sqrt(min_size)`, with `cut` the number of edges between the two groups.
@@ -584,7 +585,7 @@ fn format_bound(bound: Option<f64>) -> String {
 /// same-cell or different-cell by the majority ground-truth cell of each group. A merge rule
 /// "merge when `r > k`" works on pairs whose smaller group has at least `s` nodes if one `k`
 /// lies above the printed `k_lower_different` and below the printed `k_upper_same`.
-fn oracle_report(scoring: &Scoring, group_of_node: &[u32]) {
+fn oracle_report(scoring: &Scoring, group_of_node: &[u32]) -> Vec<OraclePair> {
     let n = scoring.num_nodes();
     let num_groups = group_of_node.iter().max().map_or(0, |&m| m as usize + 1);
 
@@ -643,6 +644,7 @@ fn oracle_report(scoring: &Scoring, group_of_node: &[u32]) {
         let g2 = (key & 0xFFFF_FFFF) as usize;
         let min_size = sizes[g1].min(sizes[g2]);
         pairs.push(OraclePair {
+            groups: (g1 as u32, g2 as u32),
             min_size,
             r: (j - i) as f64 / (min_size as f64).sqrt(),
             same_cell: majority_cell[g1] == majority_cell[g2],
@@ -742,6 +744,57 @@ fn oracle_report(scoring: &Scoring, group_of_node: &[u32]) {
                 }
             );
         }
+    }
+    pairs
+}
+
+/// What the pairwise decisions mean for cells. For every `k` of the grid, merges each pair with
+/// `r > k` once, with the group sizes of the input partition, and scores the merged partition.
+/// A supplement to the oracle; the separation gate does not use it.
+fn oracle_merge_report(scoring: &Scoring, group_of_node: &[u32], pairs: &[OraclePair]) {
+    fn find(parents: &mut [u32], mut x: u32) -> u32 {
+        while parents[x as usize] != x {
+            parents[x as usize] = parents[parents[x as usize] as usize];
+            x = parents[x as usize];
+        }
+        x
+    }
+
+    let num_groups = group_of_node.iter().max().map_or(0, |&m| m as usize + 1);
+    for &k in &ORACLE_K_GRID {
+        let mut parents: Vec<u32> = (0..num_groups as u32).collect();
+        let mut same_merged = 0usize;
+        let mut different_merged = 0usize;
+        for pair in pairs.iter().filter(|p| p.r > k) {
+            if pair.same_cell {
+                same_merged += 1;
+            } else {
+                different_merged += 1;
+            }
+            let a = find(&mut parents, pair.groups.0);
+            let b = find(&mut parents, pair.groups.1);
+            if a != b {
+                parents[a.max(b) as usize] = a.min(b);
+            }
+        }
+        let merged: Vec<usize> = group_of_node
+            .iter()
+            .map(|&g| find(&mut parents, g) as usize)
+            .collect();
+        let stats = scoring.final_stats(&merged);
+        println!(
+            "ORACLE_MERGE\tk={}\tsame_cell_pairs_merged={}\tdifferent_cell_pairs_merged={}\tover_split_cells={}\tunder_split_components={}\tcrossing_retained_pct={:.4}\tari={:.6}\tnmi={:.6}\tcomponents_ge_8k={}\tnodes_in_small_components={}",
+            k,
+            same_merged,
+            different_merged,
+            stats.over_split_cells,
+            stats.under_split_components,
+            pct(stats.crossing_retained, scoring.num_crossing_edges),
+            stats.ari,
+            stats.nmi,
+            stats.large_components,
+            stats.nodes_in_small_components
+        );
     }
 }
 
@@ -851,7 +904,8 @@ fn run_variant(
                 .iter()
                 .map(|&g| g as u32)
                 .collect();
-            oracle_report(scoring, &group_of_node);
+            let pairs = oracle_report(scoring, &group_of_node);
+            oracle_merge_report(scoring, &group_of_node, &pairs);
             None
         }
         // Oracle on the final components of B3: could a square-root rule run after Leiden?
@@ -861,7 +915,9 @@ fn run_variant(
             let communities = recorder.run("leiden", || {
                 modularity_leiden(graph, groups.into_node_partitioning(), true)
             });
-            oracle_report(scoring, &scoring.final_components(&communities));
+            let components = scoring.final_components(&communities);
+            let pairs = oracle_report(scoring, &components);
+            oracle_merge_report(scoring, &components, &pairs);
             Some(communities)
         }
         other => {
