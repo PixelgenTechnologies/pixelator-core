@@ -256,6 +256,16 @@ where
                         break;
                     }
                 }
+
+                // A degree-1 node on side B read its neighbour before side A was updated in the
+                // last round, so it may hold a label its neighbour has left. Side A is updated
+                // last and needs no such pass.
+                (0..n).into_par_iter().with_min_len(4096).for_each(|b| {
+                    if is_b[b] && indptr[b + 1] - indptr[b] == 1 {
+                        let label = parents[indices[indptr[b]]].load(Ordering::Relaxed);
+                        parents[b].store(label, Ordering::Relaxed);
+                    }
+                });
             }
             FourCycleBridgeMode::MergeSameCoreBridges => {
                 const UNSET: usize = usize::MAX;
@@ -453,5 +463,46 @@ mod tests {
         assert_ne!(m_same[0], m_same[3]);
         assert_ne!(m_same[11], m_same[0]);
         assert_ne!(m_same[11], m_same[3]);
+    }
+
+    #[test]
+    fn test_strict_majority_leaves_follow_their_neighbour() {
+        // A-nodes: 0, 1, 2, 3 (core), 4 (joins the core in the A pass), 10 (leaf)
+        // B-nodes: 5, 6, 7, 8 (core), 9 (leaf)
+        // Three 4-cycles form one core: 0-5-1-7, 2-6-3-8 and 1-7-2-8.
+        // Node 4 has two neighbours in the core (5 and 6) that share no other A-node, so it is
+        // in no 4-cycle and joins the core only when side A is updated. Its leaf 9 was updated
+        // before that, in the B pass of the same round.
+        let edges = edges_from_tuples(vec![
+            (0, 5),
+            (0, 7),
+            (1, 5),
+            (1, 7),
+            (2, 6),
+            (2, 8),
+            (3, 6),
+            (3, 8),
+            (1, 8),
+            (2, 7),
+            (4, 5),
+            (4, 6),
+            (4, 9),
+            (10, 5),
+        ]);
+        let is_b = vec![
+            false, false, false, false, false, // 0..=4 in A
+            true, true, true, true, true,  // 5..=9 in B
+            false, // 10 in A
+        ];
+        let graph = Graph::<u8>::from_edges(edges, 11).with_bipartite_side_mask(is_b.clone());
+
+        // One round only, so that no later round can repair a stale leaf.
+        let partitioning: FastNodePartitioning =
+            four_cycle_compression(&graph, &is_b, FourCycleBridgeMode::StrictMajorityOnly, 1);
+        let groups = partitioning.get_node_to_partition_map();
+        assert_eq!(groups[4], groups[0]);
+        assert_eq!(groups[9], groups[4]);
+        assert_eq!(groups[10], groups[5]);
+        assert_eq!(partitioning.num_partitions(), 1);
     }
 }

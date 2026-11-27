@@ -413,6 +413,8 @@ struct StageRecord {
 struct Recorder {
     base_live: usize,
     stages: Vec<StageRecord>,
+    /// Extra `key=value` measurements of a variant, printed and added to the `RESULT` line.
+    extras: Vec<(&'static str, String)>,
 }
 
 impl Recorder {
@@ -420,6 +422,7 @@ impl Recorder {
         Recorder {
             base_live: reset_peak_memory(),
             stages: Vec::new(),
+            extras: Vec::new(),
         }
     }
 
@@ -497,6 +500,20 @@ fn four_cycle_groups(graph: &Graph<u8>) -> FastNodePartitioning {
     )
 }
 
+/// Degree-1 nodes that are not in the group of their only neighbour.
+fn count_detached_leaves(graph: &Graph<u8>, groups: &FastNodePartitioning) -> usize {
+    let adj = graph.get_adjacency_matrix();
+    let indptr_raw = adj.indptr();
+    let indptr = indptr_raw.as_slice().unwrap();
+    let indices = adj.indices();
+    let group_of_node = groups.get_node_to_partition_map();
+    (0..graph.get_num_nodes())
+        .filter(|&u| {
+            indptr[u + 1] - indptr[u] == 1 && group_of_node[u] != group_of_node[indices[indptr[u]]]
+        })
+        .count()
+}
+
 /// Runs `variant` and returns the community of every node, or `None` for a variant that stops
 /// after its early stage.
 fn run_variant(
@@ -533,6 +550,10 @@ fn run_variant(
         "3b" => {
             let groups = recorder.run("four_cycle", || four_cycle_groups(&graph));
             recorder.score_groups(scoring, &groups);
+            recorder.extras.push((
+                "detached_leaves",
+                count_detached_leaves(&graph, &groups).to_string(),
+            ));
             None
         }
         other => {
@@ -644,6 +665,10 @@ fn run(dataset_prefix: &str, variant: &str, shuffle_seed: Option<u64>) {
                 pct(fold.intra_folded, scoring.num_intra_edges())
             );
         }
+    }
+    for (key, value) in &recorder.extras {
+        println!("EXTRA {key}={value}");
+        result += &format!("\t{key}={value}");
     }
     println!(
         "TOTAL secs={:.3} peak_heap_mb={:.1}",
