@@ -920,7 +920,7 @@ fn run_variant(
             let leiden_graph = recorder.run("leiden", || {
                 modularity_leiden_graph(graph, groups.into_node_partitioning(), true)
             });
-            let (communities, before, after, checks) = recorder.run("sqrt_merge", || {
+            let (communities, before, after, checks, merged) = recorder.run("sqrt_merge", || {
                 let mut contracted = contract_leiden_communities(&leiden_graph);
                 let before = contracted.graph.get_graph().get_num_nodes();
                 let node_weight_sum: usize = contracted.graph.get_node_weights().iter().sum();
@@ -947,8 +947,32 @@ fn run_variant(
                     before,
                     after,
                     (node_weight_sum, inter_edge_weight),
+                    contracted.graph,
                 )
             });
+
+            // How far the pairs left unmerged are from the threshold: the largest remaining
+            // `edge weight / sqrt(min(node counts))`, over all pairs and over pairs of two
+            // components of cell size.
+            let merged_sizes = merged.get_node_weights();
+            let (mut max_ratio, mut max_ratio_large) = (0.0f64, 0.0f64);
+            for edge in merged.get_graph().get_edges_iter() {
+                if edge.src >= edge.dest {
+                    continue;
+                }
+                let smaller = merged_sizes[edge.src].min(merged_sizes[edge.dest]);
+                let ratio = edge.weight as f64 / (smaller as f64).sqrt();
+                max_ratio = max_ratio.max(ratio);
+                if smaller >= MIN_PNA_COMPONENT_SIZE {
+                    max_ratio_large = max_ratio_large.max(ratio);
+                }
+            }
+            recorder
+                .extras
+                .push(("max_ratio_left", format!("{max_ratio:.4}")));
+            recorder
+                .extras
+                .push(("max_ratio_left_large", format!("{max_ratio_large:.4}")));
 
             // The contracted graph must describe Leiden's communities on the original graph.
             let leiden_communities = leiden_graph.get_ancestor_to_partition_map();
