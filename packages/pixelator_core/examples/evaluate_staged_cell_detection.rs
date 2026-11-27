@@ -21,6 +21,7 @@ use mimalloc::MiMalloc;
 use rand::prelude::*;
 use rustc_hash::FxHashMap as HashMap;
 
+use pixelator_core::boundary_polish::boundary_polish;
 use pixelator_core::common::constants::MIN_PNA_COMPONENT_SIZE;
 use pixelator_core::common::graph::Graph;
 use pixelator_core::common::io::{
@@ -491,13 +492,16 @@ fn modularity_leiden(
 
 /// As `modularity_leiden`, but returns the contracted graph Leiden ends with: one node per
 /// community, edge weights counting the original edges between two communities.
-fn modularity_leiden_graph(
-    graph: Graph<u8>,
+fn modularity_leiden_graph<G>(
+    graph: G,
     partition: LeidenNodePartitioning,
     aggregate_first: bool,
-) -> WeightedPartitionedGraph<Modularity> {
-    let quality = Modularity::new(RESOLUTION, graph.get_total_edge_weight());
+) -> WeightedPartitionedGraph<Modularity>
+where
+    Graph<usize>: From<G>,
+{
     let graph = Graph::<usize>::from(graph);
+    let quality = Modularity::new(RESOLUTION, graph.get_total_edge_weight());
     let mut wp_graph =
         WeightedPartitionedGraph::new(graph, partition, quality, None, Some(LEIDEN_SEED));
     if aggregate_first {
@@ -913,13 +917,24 @@ fn run_variant(
             }))
         }
         // B3, then the square-root merge on Leiden's communities until nothing merges.
-        "A2" => {
+        // A5 is A2 followed by one round of boundary polish on the original graph.
+        "A2" | "A5" => {
             let num_nodes = graph.get_num_nodes();
             let groups = recorder.run("four_cycle", || four_cycle_groups(&graph));
             recorder.score_groups(scoring, &groups);
-            let leiden_graph = recorder.run("leiden", || {
-                modularity_leiden_graph(graph, groups.into_node_partitioning(), true)
-            });
+            // The polish needs the original graph, so A5 lends it to Leiden instead of giving
+            // it away.
+            let (leiden_graph, graph) = if variant == "A5" {
+                let leiden_graph = recorder.run("leiden", || {
+                    modularity_leiden_graph(&graph, groups.into_node_partitioning(), true)
+                });
+                (leiden_graph, Some(graph))
+            } else {
+                let leiden_graph = recorder.run("leiden", || {
+                    modularity_leiden_graph(graph, groups.into_node_partitioning(), true)
+                });
+                (leiden_graph, None)
+            };
             let (communities, before, after, checks, merged) = recorder.run("sqrt_merge", || {
                 let mut contracted = contract_leiden_communities(&leiden_graph);
                 let before = contracted.graph.get_graph().get_num_nodes();
@@ -996,6 +1011,37 @@ fn run_variant(
             recorder
                 .extras
                 .push(("communities_after_merge", after.to_string()));
+
+            let Some(graph) = graph else {
+                return Some(communities);
+            };
+            let before_polish = scoring.final_stats(&communities);
+            let mut communities = communities;
+            let num_moves = recorder.run("polish", || {
+                let is_b = graph
+                    .get_bipartite_side_mask()
+                    .expect("Graph loaded from parquet must have a bipartite side mask");
+                boundary_polish(&graph, is_b, &mut communities)
+            });
+            recorder
+                .extras
+                .push(("polish_moves", num_moves.to_string()));
+            recorder.extras.push((
+                "pre_polish_over_split_cells",
+                before_polish.over_split_cells.to_string(),
+            ));
+            recorder.extras.push((
+                "pre_polish_under_split_components",
+                before_polish.under_split_components.to_string(),
+            ));
+            recorder.extras.push((
+                "pre_polish_crossing_retained",
+                before_polish.crossing_retained.to_string(),
+            ));
+            recorder.extras.push((
+                "pre_polish_nodes_in_small_components",
+                before_polish.nodes_in_small_components.to_string(),
+            ));
             Some(communities)
         }
         // 4-cycle compression only, no final stage.
@@ -1073,7 +1119,7 @@ fn run_variant(
         }
         other => {
             eprintln!(
-                "Unknown variant '{other}'. Use B1, B1+, B2, B3, A2, 3b, handover, oracle-a or oracle-b."
+                "Unknown variant '{other}'. Use B1, B1+, B2, B3, A2, A5, 3b, handover, oracle-a or oracle-b."
             );
             std::process::exit(1);
         }
