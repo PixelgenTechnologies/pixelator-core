@@ -506,8 +506,9 @@ fn run_variant(
     recorder: &mut Recorder,
 ) -> Option<Vec<usize>> {
     match variant {
-        // Current hybrid path: queue FLP, then modularity Leiden.
-        "B1" => {
+        // Current hybrid path: queue FLP, then modularity Leiden. "B1+" is the same pipeline, named
+        // apart so that runs after the Leiden speedups are not mixed up with the `dev` baseline.
+        "B1" | "B1+" => {
             let groups = recorder.run("flp", || queue_flp(&graph));
             recorder.score_groups(scoring, &groups);
             Some(recorder.run("leiden", || {
@@ -520,6 +521,14 @@ fn run_variant(
                 LeidenNodePartitioning::initialize_with_singlet_partitions(graph.get_num_nodes());
             modularity_leiden(graph, singletons, false)
         })),
+        // 4-cycle compression, then modularity Leiden.
+        "B3" => {
+            let groups = recorder.run("four_cycle", || four_cycle_groups(&graph));
+            recorder.score_groups(scoring, &groups);
+            Some(recorder.run("leiden", || {
+                modularity_leiden(graph, groups.into_node_partitioning(), true)
+            }))
+        }
         // 4-cycle compression only, no final stage.
         "3b" => {
             let groups = recorder.run("four_cycle", || four_cycle_groups(&graph));
@@ -527,7 +536,7 @@ fn run_variant(
             None
         }
         other => {
-            eprintln!("Unknown variant '{other}'. Use B1, B2 or 3b.");
+            eprintln!("Unknown variant '{other}'. Use B1, B1+, B2, B3 or 3b.");
             std::process::exit(1);
         }
     }

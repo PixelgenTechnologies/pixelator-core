@@ -20,7 +20,7 @@ pub type PartitionId = usize;
 /// Trait for types that can be used as edge weights in a graph.
 /// Must support numeric operations, conversion, and basic traits.
 pub trait EdgeWeight:
-    Into<usize> + Num + Clone + Copy + Default + Add + Sum + std::fmt::Debug
+    Into<usize> + Num + Clone + Copy + Default + Add + Sum + Send + Sync + std::fmt::Debug
 {
 }
 impl EdgeWeight for u8 {}
