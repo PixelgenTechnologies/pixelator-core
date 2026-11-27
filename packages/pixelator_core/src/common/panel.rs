@@ -65,8 +65,8 @@ impl Panel {
     /// # Errors
     ///
     /// Returns an error if the file cannot be opened or read, as soon as any
-    /// row fails to deserialize, or if a `sequence_1` or `sequence_2` is
-    /// duplicated across markers.
+    /// row fails to deserialize, or if a `sequence_1` or `sequence_2` cannot be
+    /// 2-bit encoded or is duplicated across markers.
     pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn Error>> {
         let mut reader = ReaderBuilder::new()
             .comment(Some(b'#'))
@@ -90,25 +90,36 @@ impl Panel {
 
     /// Builds a panel from markers already in memory, indexing markers as they appear in
     /// the input vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a `sequence_1` or `sequence_2` cannot be 2-bit encoded
+    /// (see [`encode_dna_2bit`]) or is duplicated across markers.
     pub fn from_markers(markers: Vec<PanelMarker>) -> Result<Self, Box<dyn Error>> {
         let mut map_seq_1 = HashMap::default();
         let mut map_seq_2 = HashMap::default();
         for (index, m) in markers.iter().enumerate() {
             let index = index as i32;
-            if map_seq_1
-                .insert(encode_dna_2bit(m.sequence_1.as_bytes()), index)
-                .is_some()
-            {
+            let seq_1 = encode_dna_2bit(m.sequence_1.as_bytes()).map_err(|e| {
+                format!(
+                    "Invalid sequence_1 '{}' in panel (marker {}): {e}",
+                    m.sequence_1, m.marker_id
+                )
+            })?;
+            let seq_2 = encode_dna_2bit(m.sequence_2.as_bytes()).map_err(|e| {
+                format!(
+                    "Invalid sequence_2 '{}' in panel (marker {}): {e}",
+                    m.sequence_2, m.marker_id
+                )
+            })?;
+            if map_seq_1.insert(seq_1, index).is_some() {
                 return Err(format!(
                     "Duplicate sequence_1 '{}' found in panel (marker {})",
                     m.sequence_1, m.marker_id
                 )
                 .into());
             }
-            if map_seq_2
-                .insert(encode_dna_2bit(m.sequence_2.as_bytes()), index)
-                .is_some()
-            {
+            if map_seq_2.insert(seq_2, index).is_some() {
                 return Err(format!(
                     "Duplicate sequence_2 '{}' found in panel (marker {})",
                     m.sequence_2, m.marker_id
@@ -393,13 +404,13 @@ mod tests {
 
         for (marker, seq1, seq2) in FIXTURE_ROWS {
             assert_eq!(
-                panel.lookup_seq1(encode_dna_2bit(seq1.as_bytes())),
+                panel.lookup_seq1(encode_dna_2bit(seq1.as_bytes()).unwrap()),
                 Some(*marker),
                 "sequence_1 lookup failed for {marker}",
             );
             // Both sequences are stored exactly as they appear in the file.
             assert_eq!(
-                panel.lookup_seq2(encode_dna_2bit(seq2.as_bytes())),
+                panel.lookup_seq2(encode_dna_2bit(seq2.as_bytes()).unwrap()),
                 Some(*marker),
                 "sequence_2 lookup failed for {marker}",
             );
@@ -453,7 +464,7 @@ mod tests {
         let panel = Panel::from_path(file.path()).expect("load panel");
 
         // A sequence that does not appear in the fixture.
-        let unknown = encode_dna_2bit(b"TTTTTTTTTT");
+        let unknown = encode_dna_2bit(b"TTTTTTTTTT").unwrap();
         assert_eq!(panel.lookup_seq1(unknown), None);
         assert_eq!(panel.lookup_seq2(unknown), None);
     }
@@ -471,17 +482,23 @@ mod tests {
         .expect("build panel from markers");
 
         assert_eq!(
-            panel.lookup_seq1(encode_dna_2bit(seq1.as_bytes())),
+            panel.lookup_seq1(encode_dna_2bit(seq1.as_bytes()).unwrap()),
             Some("SYNTH")
         );
         assert_eq!(
-            panel.lookup_seq2(encode_dna_2bit(seq2.as_bytes())),
+            panel.lookup_seq2(encode_dna_2bit(seq2.as_bytes()).unwrap()),
             Some("SYNTH")
         );
 
         // No cross-contamination: seq2 is not in map_seq_1 and seq1 is not in map_seq_2.
-        assert_eq!(panel.lookup_seq1(encode_dna_2bit(seq2.as_bytes())), None);
-        assert_eq!(panel.lookup_seq2(encode_dna_2bit(seq1.as_bytes())), None);
+        assert_eq!(
+            panel.lookup_seq1(encode_dna_2bit(seq2.as_bytes()).unwrap()),
+            None
+        );
+        assert_eq!(
+            panel.lookup_seq2(encode_dna_2bit(seq1.as_bytes()).unwrap()),
+            None
+        );
     }
 
     #[test]
@@ -494,7 +511,7 @@ mod tests {
         .expect("build panel from markers");
         let searcher = PanelSearcher::new(panel, 0);
 
-        let seq = encode_dna_2bit(b"CAGCTATGGT");
+        let seq = encode_dna_2bit(b"CAGCTATGGT").unwrap();
         assert_eq!(searcher.search_seq1(seq), MarkerMatch::Hit(0));
         assert_eq!(searcher.search_seq2(seq), MarkerMatch::Hit(0));
     }
@@ -510,7 +527,7 @@ mod tests {
         let searcher = PanelSearcher::new(panel, 0);
 
         // One base differs from the panel sequence.
-        let near = encode_dna_2bit(b"AAGCTATGGT");
+        let near = encode_dna_2bit(b"AAGCTATGGT").unwrap();
         assert_eq!(searcher.search_seq1(near), MarkerMatch::Miss);
         assert_eq!(searcher.search_seq2(near), MarkerMatch::Miss);
     }
@@ -525,7 +542,7 @@ mod tests {
         .expect("build panel from markers");
         let searcher = PanelSearcher::new(panel, 1);
 
-        let near = encode_dna_2bit(b"AAGCTATGGT");
+        let near = encode_dna_2bit(b"AAGCTATGGT").unwrap();
         assert_eq!(searcher.search_seq1(near), MarkerMatch::Hit(0));
         assert_eq!(searcher.search_seq2(near), MarkerMatch::Hit(0));
     }
@@ -541,7 +558,7 @@ mod tests {
         let searcher = PanelSearcher::new(panel, 1);
 
         // Two bases differ from the panel sequence.
-        let far = encode_dna_2bit(b"AAGCTATGGA");
+        let far = encode_dna_2bit(b"AAGCTATGGA").unwrap();
         assert_eq!(searcher.search_seq1(far), MarkerMatch::Miss);
         assert_eq!(searcher.search_seq2(far), MarkerMatch::Miss);
     }
@@ -556,7 +573,7 @@ mod tests {
         .expect("build panel from markers");
         let searcher = PanelSearcher::new(panel, 2);
 
-        let unknown = encode_dna_2bit(b"TTTTTTTTTT");
+        let unknown = encode_dna_2bit(b"TTTTTTTTTT").unwrap();
         assert_eq!(searcher.search_seq1(unknown), MarkerMatch::Miss);
         assert_eq!(searcher.search_seq2(unknown), MarkerMatch::Miss);
     }
@@ -571,8 +588,8 @@ mod tests {
         .expect("build panel from markers");
         let searcher = PanelSearcher::new(panel, 0);
 
-        let seq1 = encode_dna_2bit(b"ACGTACGTAC");
-        let seq2 = encode_dna_2bit(b"TGCATGCATG");
+        let seq1 = encode_dna_2bit(b"ACGTACGTAC").unwrap();
+        let seq2 = encode_dna_2bit(b"TGCATGCATG").unwrap();
 
         assert_eq!(searcher.search_seq1(seq1), MarkerMatch::Hit(0));
         assert_eq!(searcher.search_seq2(seq2), MarkerMatch::Hit(0));
@@ -598,7 +615,7 @@ mod tests {
         let searcher = PanelSearcher::new(panel, 2);
 
         // Distance 1 from A, distance 2 from B.
-        let query = encode_dna_2bit(b"TAAAAAAAAA");
+        let query = encode_dna_2bit(b"TAAAAAAAAA").unwrap();
         assert_eq!(searcher.search_seq1(query), MarkerMatch::Hit(0));
     }
 
@@ -620,7 +637,7 @@ mod tests {
         let searcher = PanelSearcher::new(panel, 2);
 
         // B is scanned first but A is closer.
-        let query = encode_dna_2bit(b"TAAAAAAAAA");
+        let query = encode_dna_2bit(b"TAAAAAAAAA").unwrap();
         assert_eq!(searcher.search_seq1(query), MarkerMatch::Hit(1));
     }
 
@@ -642,13 +659,13 @@ mod tests {
         let searcher = PanelSearcher::new(panel, 2);
 
         // Distance 2 from both A and B.
-        let query = encode_dna_2bit(b"TTAAAAAAAA");
+        let query = encode_dna_2bit(b"TTAAAAAAAA").unwrap();
         assert_eq!(
-            hamming_distance_2bit(query, encode_dna_2bit(b"AAAAAAAAAA")),
+            hamming_distance_2bit(query, encode_dna_2bit(b"AAAAAAAAAA").unwrap()),
             2
         );
         assert_eq!(
-            hamming_distance_2bit(query, encode_dna_2bit(b"TTTTAAAAAA")),
+            hamming_distance_2bit(query, encode_dna_2bit(b"TTTTAAAAAA").unwrap()),
             2
         );
         assert_eq!(searcher.search_seq1(query), MarkerMatch::Ambiguous);
@@ -664,7 +681,7 @@ mod tests {
         .expect("build panel from markers");
         let searcher = PanelSearcher::new(panel, 2);
 
-        let unknown = encode_dna_2bit(b"TTTTTTTTTT");
+        let unknown = encode_dna_2bit(b"TTTTTTTTTT").unwrap();
         assert_eq!(searcher.search_seq1(unknown), MarkerMatch::Miss);
     }
 
@@ -678,7 +695,7 @@ mod tests {
         .expect("build panel from markers");
         let searcher = PanelSearcher::new(panel, 2);
 
-        let seq = encode_dna_2bit(b"CAGCTATGGT");
+        let seq = encode_dna_2bit(b"CAGCTATGGT").unwrap();
         assert_eq!(searcher.search_seq1(seq), MarkerMatch::Hit(0));
     }
 }

@@ -30,11 +30,13 @@ impl LbsSearcher {
     ///
     /// References shorter than `umi_len - max_edits` are skipped: a UMI of
     /// `umi_len` bases needs at least `umi_len - ref.len()` deletions to fit
-    /// inside a shorter reference, which already exceeds the budget.
+    /// inside a shorter reference, which already exceeds the budget. References
+    /// containing a base other than `A`, `C`, `G` or `T` cannot be packed and
+    /// are skipped with a warning.
     ///
     /// When the filter is enabled but no usable LBS references remain (none in
-    /// the assay, or all too short), a warning is logged and the searcher stays
-    /// empty.
+    /// the assay, or all too short or unpackable), a warning is logged and the
+    /// searcher stays empty.
     ///
     /// Panics if `umi_len` or a retained LBS length exceeds 32 (the 2-bit `u64`
     /// packing limit).
@@ -70,10 +72,18 @@ impl LbsSearcher {
                 lbs.len()
             );
             let lbs_bytes = lbs.as_bytes();
-            references.push((encode_dna_2bit(lbs_bytes), lbs.len()));
+            let (forward, reverse) =
+                match (encode_dna_2bit(lbs_bytes), encode_dna_2bit_rc(lbs_bytes)) {
+                    (Ok(forward), Ok(reverse)) => (forward, reverse),
+                    (Err(e), _) | (_, Err(e)) => {
+                        log::warn!("Skipping LBS sequence {lbs:?} in the LBS-overlap filter: {e}");
+                        continue;
+                    }
+                };
+            references.push((forward, lbs.len()));
             // The reverse complement reference is used here since it has also
             // been observed as a potential contaminant in the UMIs.
-            references.push((encode_dna_2bit_rc(lbs_bytes), lbs.len()));
+            references.push((reverse, lbs.len()));
         }
 
         if references.is_empty() {
@@ -132,7 +142,7 @@ mod tests {
 
     #[test]
     fn search_hits_exact_forward_lbs1() {
-        assert!(searcher(6).search(encode_dna_2bit(LBS1)));
+        assert!(searcher(6).search(encode_dna_2bit(LBS1).unwrap()));
     }
 
     #[test]
@@ -140,10 +150,10 @@ mod tests {
         // A UMI that is the reverse complement of lbs-1 matches the RC reference
         // exactly, so its forward (canonical) encoding must be caught.
         let umi = revcomp(LBS1);
-        assert!(searcher(6).search(encode_dna_2bit(&umi)));
+        assert!(searcher(6).search(encode_dna_2bit(&umi).unwrap()));
         // The same molecule read on the reverse strand encodes RC-first; both
         // canonical encodings are contaminated.
-        assert!(searcher(6).search(encode_dna_2bit_rc(LBS1)));
+        assert!(searcher(6).search(encode_dna_2bit_rc(LBS1).unwrap()));
     }
 
     #[test]
@@ -151,14 +161,14 @@ mod tests {
         // lbs-1 with seven spread-out substitutions: infix distance exactly 7 to
         // lbs-1 (and further to its RC), so it is caught at k=7 but not k=6.
         let umi = b"GAAGAGACTCTGTTCACACAGTCAAGTC";
-        assert!(!searcher(6).search(encode_dna_2bit(umi)));
-        assert!(searcher(7).search(encode_dna_2bit(umi)));
+        assert!(!searcher(6).search(encode_dna_2bit(umi).unwrap()));
+        assert!(searcher(7).search(encode_dna_2bit(umi).unwrap()));
     }
 
     #[test]
     fn search_misses_random_umi() {
         let umi = b"AAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-        assert!(!searcher(6).search(encode_dna_2bit(umi)));
+        assert!(!searcher(6).search(encode_dna_2bit(umi).unwrap()));
     }
 
     #[test]
@@ -214,14 +224,14 @@ assay_spec:
 
         let s = LbsSearcher::new(&assay, Some(6));
         assert!(s.references.is_empty());
-        assert!(!s.search(encode_dna_2bit(LBS1)));
+        assert!(!s.search(encode_dna_2bit(LBS1).unwrap()));
     }
 
     #[test]
     fn disabled_filter_never_matches() {
         let s = LbsSearcher::new(&proxiome_v2_assay(), None);
         assert!(s.references.is_empty());
-        assert!(!s.search(encode_dna_2bit(LBS1)));
+        assert!(!s.search(encode_dna_2bit(LBS1).unwrap()));
     }
 
     /// Fidelity against the known contaminant list. That list is itself the
@@ -245,7 +255,7 @@ assay_spec:
             }
             assert_eq!(umi.len(), 28, "expected a 28 bp UMI, got {umi:?}");
             assert!(
-                s.search(encode_dna_2bit(umi.as_bytes())),
+                s.search(encode_dna_2bit(umi.as_bytes()).unwrap()),
                 "known contaminant UMI {umi} should be flagged at k=6"
             );
             count += 1;
@@ -267,7 +277,7 @@ assay_spec:
         let mut hits = 0usize;
         for _ in 0..10_000 {
             let umi: Vec<u8> = (0..28).map(|_| BASES[rng.random_range(0..4)]).collect();
-            if s.search(encode_dna_2bit(&umi)) {
+            if s.search(encode_dna_2bit(&umi).unwrap()) {
                 hits += 1;
             }
         }

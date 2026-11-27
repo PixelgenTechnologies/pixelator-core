@@ -1,8 +1,3 @@
-/// Returns whether `seq` contains any `N` base.
-pub(super) fn has_n(seq: &[u8]) -> bool {
-    seq.contains(&b'N')
-}
-
 /// Returns whether the mean Phred+33 quality across the informative `regions`
 /// (pid + umi) is strictly below `min`.
 ///
@@ -85,26 +80,6 @@ impl Default for FilterConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn has_n_detects_uppercase_n_anywhere() {
-        assert!(has_n(b"ACNT"));
-        assert!(has_n(b"NACGT"));
-        assert!(has_n(b"ACGTN"));
-    }
-
-    #[test]
-    fn has_n_is_false_without_uppercase_n() {
-        assert!(!has_n(b"ACGT"));
-        // Only the uppercase `N` sentinel counts; lowercase `n` is not treated
-        // as a missing base here.
-        assert!(!has_n(b"acnt"));
-    }
-
-    #[test]
-    fn has_n_empty_slice_is_false() {
-        assert!(!has_n(b""));
-    }
 
     #[test]
     fn avg_phred_below_true_when_mean_under_threshold() {

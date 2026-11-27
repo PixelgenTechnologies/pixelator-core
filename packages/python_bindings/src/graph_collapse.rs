@@ -236,7 +236,7 @@ mod tests {
     use super::*;
 
     fn umi(seq: &str) -> u64 {
-        encode_dna_2bit(seq.as_bytes())
+        encode_dna_2bit(seq.as_bytes()).unwrap()
     }
 
     #[test]

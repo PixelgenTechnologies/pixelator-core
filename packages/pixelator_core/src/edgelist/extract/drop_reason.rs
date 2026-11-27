@@ -4,7 +4,8 @@
 /// variants.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DropReason {
-    /// Either read contained an `N` base in the informative regions.
+    /// Either read contained an `N`, or any other base that is not uppercase
+    /// `A`, `C`, `G` or `T`, in the informative regions.
     HasN,
     /// The `pid-1` barcode was not found in the panel.
     Pid1NotInPanel,

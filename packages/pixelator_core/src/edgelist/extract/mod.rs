@@ -16,7 +16,7 @@ pub use filters::{DEFAULT_LBS_OVERLAP_MAX_EDITS, FilterConfig};
 pub use lbs_searcher::LbsSearcher;
 pub use row::Row;
 
-use filters::{avg_phred_below, has_n, umi_base_freq_exceeds};
+use filters::{avg_phred_below, umi_base_freq_exceeds};
 
 /// Decides whether a read yields an edgelist row, and builds the row if it does.
 ///
@@ -99,12 +99,14 @@ impl Extractor {
         let (umi_start, umi_end) = self.layout.get(side, strand).umi;
         let umi_slice = seq.get(umi_start..umi_end).ok_or(DropReason::TooShort)?;
 
-        // Only the informative regions (pid + umi) are checked for `N`; linker/uei
-        // bases are ignored. Checked before the quality gate so a read that is both
-        // N-containing and low-quality still drops as `HasN`.
-        if has_n(pid_slice) || has_n(umi_slice) {
+        // Only the informative regions (pid + umi) are packed, so only they must be
+        // pure ACGT; linker/uei bases are ignored. Any byte the encoder rejects
+        // (`N`, lowercase, IUPAC codes, ...) drops the read as `HasN`. Encoded
+        // before the quality gate so a read that is both N-containing and
+        // low-quality still drops as `HasN`.
+        let (Ok(pid), Ok(umi)) = (strand.encode(pid_slice), strand.encode(umi_slice)) else {
             return Err(DropReason::HasN);
-        }
+        };
         if let Some(min_q) = self.filters.min_avg_quality
             && let Some(qual) = r.qual()
             && avg_phred_below(
@@ -117,15 +119,13 @@ impl Extractor {
         {
             return Err(DropReason::LowQuality);
         }
-        let marker_idx = side.lookup(&self.panel_searcher, strand.encode(pid_slice))?;
+        let marker_idx = side.lookup(&self.panel_searcher, pid)?;
 
         if let Some(max_freq) = self.filters.max_umi_base_freq
             && umi_base_freq_exceeds(umi_slice, max_freq)
         {
             return Err(DropReason::LowComplexity);
         }
-
-        let umi = strand.encode(umi_slice);
 
         if self.lbs_searcher.search(umi) {
             return Err(DropReason::LbsOverlap);

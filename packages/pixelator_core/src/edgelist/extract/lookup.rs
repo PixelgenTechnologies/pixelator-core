@@ -62,20 +62,20 @@ mod tests {
         let side_b = ConjugateSide::B;
 
         assert_eq!(
-            side_a.lookup(&searcher, encode_dna_2bit(seq1.as_bytes())),
+            side_a.lookup(&searcher, encode_dna_2bit(seq1.as_bytes()).unwrap()),
             Ok(0)
         );
         assert_eq!(
-            side_a.lookup(&searcher, encode_dna_2bit(seq2.as_bytes())),
+            side_a.lookup(&searcher, encode_dna_2bit(seq2.as_bytes()).unwrap()),
             Err(DropReason::Pid1NotInPanel)
         );
 
         assert_eq!(
-            side_b.lookup(&searcher, encode_dna_2bit(seq2.as_bytes())),
+            side_b.lookup(&searcher, encode_dna_2bit(seq2.as_bytes()).unwrap()),
             Ok(0)
         );
         assert_eq!(
-            side_b.lookup(&searcher, encode_dna_2bit(seq1.as_bytes())),
+            side_b.lookup(&searcher, encode_dna_2bit(seq1.as_bytes()).unwrap()),
             Err(DropReason::Pid2NotInPanel)
         );
     }
@@ -99,7 +99,7 @@ mod tests {
         .expect("build panel from markers");
         let searcher = PanelSearcher::new(panel, 2);
 
-        let query = encode_dna_2bit(b"TTAAAAAAAA");
+        let query = encode_dna_2bit(b"TTAAAAAAAA").unwrap();
         assert_eq!(
             ConjugateSide::A.lookup(&searcher, query),
             Err(DropReason::Pid1Ambiguous)
@@ -124,7 +124,7 @@ mod tests {
         .expect("build panel from markers");
         let searcher = PanelSearcher::new(panel, 2);
 
-        let query = encode_dna_2bit(b"TTAAAAAAAA");
+        let query = encode_dna_2bit(b"TTAAAAAAAA").unwrap();
         assert_eq!(
             ConjugateSide::B.lookup(&searcher, query),
             Err(DropReason::Pid2Ambiguous)

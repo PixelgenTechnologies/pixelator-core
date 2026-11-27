@@ -23,21 +23,16 @@ const PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
 /// Encode a DNA string into a 2-bit packed integer.
 ///
 /// Args:
-///     dna: DNA sequence containing only A/C/G/T characters.
+///     dna: DNA sequence of at most 32 bases containing only A/C/G/T characters.
 ///
 /// Returns:
 ///     The 2-bit packed representation as an integer.
+///
+/// Raises:
+///     ValueError: If `dna` contains another character or is longer than 32 bases.
 #[pyfunction]
 pub fn encode_dna_2bit(dna: &str) -> PyResult<u64> {
-    if dna
-        .chars()
-        .any(|base| !matches!(base, 'A' | 'C' | 'G' | 'T'))
-    {
-        return Err(PyValueError::new_err(
-            "Unsupported DNA base in input. Allowed bases are A, C, G, T.",
-        ));
-    }
-    Ok(rust_encode_dna_2bit(dna.as_bytes()))
+    rust_encode_dna_2bit(dna.as_bytes()).map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
 /// Decode a 2-bit packed integer back into a DNA string.
