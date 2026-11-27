@@ -48,6 +48,22 @@ const RANDOMNESS: f64 = 0.1;
 const LEIDEN_SEED: u64 = 0;
 const FOUR_CYCLE_MAX_ROUNDS: usize = 4;
 
+/// Group sizes at which the oracle evaluates the separation of `r`, as "the smaller group of a
+/// pair has at least this many nodes".
+const ORACLE_MIN_SIZES: [u32; 16] = [
+    1, 2, 3, 5, 10, 20, 30, 50, 100, 200, 300, 500, 1_000, 2_000, 5_000, 10_000,
+];
+const ORACLE_K_GRID: [f64; 9] = [0.03125, 0.0625, 0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0];
+/// Lower bounds of the buckets of `min(a, b)` in the oracle report.
+const ORACLE_BUCKETS: [(u32, &str); 6] = [
+    (1, "1"),
+    (2, "2-9"),
+    (10, "10-99"),
+    (100, "100-999"),
+    (1_000, "1000-9999"),
+    (10_000, "10000+"),
+];
+
 struct TrackingAllocator;
 
 static LIVE_BYTES: AtomicUsize = AtomicUsize::new(0);
@@ -515,6 +531,220 @@ fn count_detached_leaves(graph: &Graph<u8>, groups: &FastNodePartitioning) -> us
         .count()
 }
 
+fn oracle_bucket(size: u32) -> usize {
+    ORACLE_BUCKETS
+        .iter()
+        .rposition(|&(lower, _)| size >= lower)
+        .unwrap()
+}
+
+/// One pair of adjacent groups.
+struct OraclePair {
+    /// Node count of the smaller group.
+    min_size: u32,
+    /// `cut / sqrt(min_size)`, with `cut` the number of edges between the two groups.
+    r: f64,
+    same_cell: bool,
+}
+
+/// Largest `k` bound for which at least 95% of `values` are above `k` (exclusive bound).
+/// `values` must be sorted ascending.
+fn k_upper_for_same(values: &[f64]) -> Option<f64> {
+    let n = values.len();
+    if n == 0 {
+        return None;
+    }
+    let needed = (0.95 * n as f64).ceil() as usize;
+    Some(values[n - needed.max(1)])
+}
+
+/// Smallest `k` bound for which at least 99% of `values` are below `k` (exclusive bound).
+/// `values` must be sorted ascending.
+fn k_lower_for_different(values: &[f64]) -> Option<f64> {
+    let n = values.len();
+    if n == 0 {
+        return None;
+    }
+    let needed = (0.99 * n as f64).ceil() as usize;
+    Some(values[needed.max(1) - 1])
+}
+
+/// Median of `values`, which must be sorted ascending.
+fn median_of_sorted(values: &[f64]) -> Option<f64> {
+    values.get(values.len() / 2).copied()
+}
+
+fn format_bound(bound: Option<f64>) -> String {
+    bound.map_or("-".to_string(), |b| format!("{b:.4}"))
+}
+
+/// Ground-truth check of the square-root merge rule on a partition of the graph.
+///
+/// For every pair of adjacent groups it computes `r = cut / sqrt(min(a, b))` and labels the pair
+/// same-cell or different-cell by the majority ground-truth cell of each group. A merge rule
+/// "merge when `r > k`" works on pairs whose smaller group has at least `s` nodes if one `k`
+/// lies above the printed `k_lower_different` and below the printed `k_upper_same`.
+fn oracle_report(scoring: &Scoring, group_of_node: &[u32]) {
+    let n = scoring.num_nodes();
+    let num_groups = group_of_node.iter().max().map_or(0, |&m| m as usize + 1);
+
+    let mut sizes = vec![0u32; num_groups];
+    for &g in group_of_node {
+        sizes[g as usize] += 1;
+    }
+
+    // Majority cell of every group; the smallest cell id wins a tie.
+    let mut group_cell: Vec<u64> = group_of_node
+        .iter()
+        .zip(scoring.cell_of_node.iter())
+        .map(|(&g, &c)| ((g as u64) << 32) | c as u64)
+        .collect();
+    group_cell.sort_unstable();
+    let mut majority_cell = vec![0u32; num_groups];
+    let mut majority_count = vec![0u32; num_groups];
+    let mut i = 0;
+    while i < group_cell.len() {
+        let key = group_cell[i];
+        let mut j = i + 1;
+        while j < group_cell.len() && group_cell[j] == key {
+            j += 1;
+        }
+        let g = (key >> 32) as usize;
+        let count = (j - i) as u32;
+        if count > majority_count[g] {
+            majority_count[g] = count;
+            majority_cell[g] = key as u32;
+        }
+        i = j;
+    }
+    drop(group_cell);
+    let nodes_in_majority: usize = majority_count.iter().map(|&c| c as usize).sum();
+
+    // Number of edges between every pair of adjacent groups.
+    let mut pair_keys: Vec<u64> = scoring
+        .edges
+        .iter()
+        .filter_map(|&(u, v)| {
+            let gu = group_of_node[u as usize];
+            let gv = group_of_node[v as usize];
+            (gu != gv).then(|| ((gu.min(gv) as u64) << 32) | gu.max(gv) as u64)
+        })
+        .collect();
+    pair_keys.sort_unstable();
+    let mut pairs: Vec<OraclePair> = Vec::new();
+    let mut i = 0;
+    while i < pair_keys.len() {
+        let key = pair_keys[i];
+        let mut j = i + 1;
+        while j < pair_keys.len() && pair_keys[j] == key {
+            j += 1;
+        }
+        let g1 = (key >> 32) as usize;
+        let g2 = (key & 0xFFFF_FFFF) as usize;
+        let min_size = sizes[g1].min(sizes[g2]);
+        pairs.push(OraclePair {
+            min_size,
+            r: (j - i) as f64 / (min_size as f64).sqrt(),
+            same_cell: majority_cell[g1] == majority_cell[g2],
+        });
+        i = j;
+    }
+    let inter_group_edges = pair_keys.len();
+    drop(pair_keys);
+
+    let same_pairs = pairs.iter().filter(|p| p.same_cell).count();
+    println!(
+        "ORACLE groups={} adjacent_pairs={} same_cell_pairs={} different_cell_pairs={} inter_group_edges={} nodes_in_majority_cell_pct={:.4}",
+        num_groups,
+        pairs.len(),
+        same_pairs,
+        pairs.len() - same_pairs,
+        inter_group_edges,
+        pct(nodes_in_majority, n)
+    );
+
+    // Per bucket of the smaller group's size.
+    let mut nodes_by_bucket = [0usize; ORACLE_BUCKETS.len()];
+    let mut groups_by_bucket = [0usize; ORACLE_BUCKETS.len()];
+    for &size in &sizes {
+        nodes_by_bucket[oracle_bucket(size)] += size as usize;
+        groups_by_bucket[oracle_bucket(size)] += 1;
+    }
+    for (bucket, &(_, label)) in ORACLE_BUCKETS.iter().enumerate() {
+        let mut same: Vec<f64> = Vec::new();
+        let mut different: Vec<f64> = Vec::new();
+        for pair in pairs.iter().filter(|p| oracle_bucket(p.min_size) == bucket) {
+            if pair.same_cell {
+                same.push(pair.r);
+            } else {
+                different.push(pair.r);
+            }
+        }
+        same.sort_unstable_by(f64::total_cmp);
+        different.sort_unstable_by(f64::total_cmp);
+        println!(
+            "ORACLE_BUCKET\tmin_size={}\tsame_pairs={}\tdifferent_pairs={}\tr_p05_same={}\tr_p99_different={}\tgroups_of_this_size={}\tnode_share_pct={:.3}",
+            label,
+            same.len(),
+            different.len(),
+            format_bound(k_upper_for_same(&same)),
+            format_bound(k_lower_for_different(&different)),
+            groups_by_bucket[bucket],
+            pct(nodes_by_bucket[bucket], n)
+        );
+    }
+
+    // Cumulative: all pairs whose smaller group has at least `s` nodes.
+    for &s in &ORACLE_MIN_SIZES {
+        let mut same: Vec<f64> = Vec::new();
+        let mut different: Vec<f64> = Vec::new();
+        for pair in pairs.iter().filter(|p| p.min_size >= s) {
+            if pair.same_cell {
+                same.push(pair.r);
+            } else {
+                different.push(pair.r);
+            }
+        }
+        same.sort_unstable_by(f64::total_cmp);
+        different.sort_unstable_by(f64::total_cmp);
+        let nodes_below: usize = sizes
+            .iter()
+            .filter(|&&size| size < s)
+            .map(|&size| size as usize)
+            .sum();
+        println!(
+            "ORACLE_MIN\ts={}\tsame_pairs={}\tdifferent_pairs={}\tk_upper_same={}\tk_lower_different={}\tr_median_same={}\tr_median_different={}\tnodes_in_groups_below_s_pct={:.3}",
+            s,
+            same.len(),
+            different.len(),
+            format_bound(k_upper_for_same(&same)),
+            format_bound(k_lower_for_different(&different)),
+            format_bound(median_of_sorted(&same)),
+            format_bound(median_of_sorted(&different)),
+            pct(nodes_below, n)
+        );
+        for &k in &ORACLE_K_GRID {
+            let same_above = same.len() - same.partition_point(|&r| r <= k);
+            let different_below = different.partition_point(|&r| r < k);
+            println!(
+                "ORACLE_K\ts={}\tk={}\tsame_above_k_pct={}\tdifferent_below_k_pct={}",
+                s,
+                k,
+                if same.is_empty() {
+                    "-".to_string()
+                } else {
+                    format!("{:.3}", pct(same_above, same.len()))
+                },
+                if different.is_empty() {
+                    "-".to_string()
+                } else {
+                    format!("{:.3}", pct(different_below, different.len()))
+                }
+            );
+        }
+    }
+}
+
 /// Hand-over from stage 2 to stage 3: contracts every group to one node whose weight is its node
 /// count. Edge weights between two contracted nodes count the original edges between the groups.
 fn contract_groups(
@@ -612,8 +842,32 @@ fn run_variant(
                 .push(("handover_checks", status.to_string()));
             None
         }
+        // Oracle on the stage-2 groups: could a square-root rule replace Leiden?
+        "oracle-a" => {
+            let groups = recorder.run("four_cycle", || four_cycle_groups(&graph));
+            recorder.score_groups(scoring, &groups);
+            let group_of_node: Vec<u32> = groups
+                .get_node_to_partition_map()
+                .iter()
+                .map(|&g| g as u32)
+                .collect();
+            oracle_report(scoring, &group_of_node);
+            None
+        }
+        // Oracle on the final components of B3: could a square-root rule run after Leiden?
+        "oracle-b" => {
+            let groups = recorder.run("four_cycle", || four_cycle_groups(&graph));
+            recorder.score_groups(scoring, &groups);
+            let communities = recorder.run("leiden", || {
+                modularity_leiden(graph, groups.into_node_partitioning(), true)
+            });
+            oracle_report(scoring, &scoring.final_components(&communities));
+            Some(communities)
+        }
         other => {
-            eprintln!("Unknown variant '{other}'. Use B1, B1+, B2, B3, 3b or handover.");
+            eprintln!(
+                "Unknown variant '{other}'. Use B1, B1+, B2, B3, 3b, handover, oracle-a or oracle-b."
+            );
             std::process::exit(1);
         }
     }
