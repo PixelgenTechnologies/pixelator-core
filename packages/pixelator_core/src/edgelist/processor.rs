@@ -175,7 +175,8 @@ impl RowSink {
             self.flush_and_send()?;
         }
         if let Some(dropped) = &mut self.dropped
-            && dropped.buffer.len() >= dropped.batch_threshold
+            && (dropped.buffer.len() >= dropped.batch_threshold
+                || dropped.buffer.text_bytes() >= super::DROPPED_BATCH_BYTES)
         {
             dropped.flush_and_send()?;
         }

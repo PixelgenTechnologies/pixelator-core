@@ -53,6 +53,11 @@ const CHANNEL_SIZE_FACTOR: usize = 4;
 /// the edgelist's 24. At this size a batch is ~30MB.
 const DROPPED_BATCH_THRESHOLD: usize = 50_000;
 
+/// Sequence, quality and name bytes after which a dropped-reads batch is sent
+/// whatever its row count, so that long reads keep it near the ~30MB of
+/// [`DROPPED_BATCH_THRESHOLD`] short ones.
+const DROPPED_BATCH_BYTES: usize = 32 * 1024 * 1024;
+
 /// Bounded channel capacity for dropped-read batches, per worker thread.
 ///
 /// Smaller than [`CHANNEL_SIZE_FACTOR`] for the same reason the batches are: with

@@ -67,6 +67,20 @@ impl DroppedReadBuffer {
         self.reason.len()
     }
 
+    /// Bytes of read text (names, sequences and qualities) currently buffered.
+    pub(crate) fn text_bytes(&self) -> usize {
+        [
+            &self.read_name,
+            &self.sequence,
+            &self.quality,
+            &self.sequence_2,
+            &self.quality_2,
+        ]
+        .iter()
+        .map(|column| column.values.len())
+        .sum()
+    }
+
     pub(crate) fn schema() -> Arc<Schema> {
         Arc::new(Schema::new(vec![
             Field::new("read_name", DataType::Utf8, false),
