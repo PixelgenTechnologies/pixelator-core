@@ -119,7 +119,11 @@ impl RowSink {
         filters: FilterConfig,
     ) -> Self {
         Self {
-            buffer: RowBuffer::new(batch_threshold, &panel),
+            // Empty until rows arrive: paraseq clones this sink for every worker
+            // (a clone keeps no spare capacity anyway), and a run rejected before
+            // its first row should not have reserved a batch. Each flush re-sizes
+            // the buffer to the capacity it reached.
+            buffer: RowBuffer::new(0, &panel),
             tx,
             batch_threshold,
             local_stats: EdgelistStats::default(),
@@ -175,7 +179,8 @@ impl RowSink {
             self.flush_and_send()?;
         }
         if let Some(dropped) = &mut self.dropped
-            && dropped.buffer.len() >= dropped.batch_threshold
+            && (dropped.buffer.len() >= dropped.batch_threshold
+                || dropped.buffer.text_bytes() >= super::DROPPED_BATCH_BYTES)
         {
             dropped.flush_and_send()?;
         }
