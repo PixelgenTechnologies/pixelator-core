@@ -6,6 +6,9 @@ mod read_layout;
 mod row_buffer;
 mod stats;
 
+#[cfg(test)]
+mod malformed_base;
+
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
