@@ -85,7 +85,8 @@ impl DroppedReadBuffer {
 
     /// Moves the buffered rows into an Arrow `RecordBatch` and resets the buffer.
     ///
-    /// Fails if a read name, sequence or quality string is not valid UTF-8.
+    /// Read names, sequences and qualities that are not valid UTF-8 were already
+    /// stored with U+FFFD in place of the invalid bytes (see `StringColumn::push`).
     pub fn flush(&mut self) -> Result<RecordBatch, ArrowError> {
         let reason = DictionaryArray::<Int32Type>::try_new(
             Int32Array::from(std::mem::take(&mut self.reason)),
@@ -132,9 +133,12 @@ impl StringColumn {
         }
     }
 
+    /// Appends a row. Bytes that are not valid UTF-8 are stored as U+FFFD, so a
+    /// malformed read is still recorded instead of failing the whole batch.
     fn push(&mut self, value: Option<&[u8]>) {
         if let Some(bytes) = value {
-            self.values.extend_from_slice(bytes);
+            self.values
+                .extend_from_slice(String::from_utf8_lossy(bytes).as_bytes());
         }
         self.has_nulls |= value.is_none();
         self.validity.push(value.is_some());
@@ -265,6 +269,25 @@ mod tests {
         assert_eq!(second.num_rows(), 1);
         assert_eq!(string_column(&second, "sequence").value(0), "GTT");
         assert_eq!(reasons(&second), ["lbs_overlap"]);
+    }
+
+    #[test]
+    fn non_utf8_bytes_are_replaced_instead_of_failing_the_flush() {
+        let r = OwnedRecord {
+            id: b"bad\xffname".to_vec(),
+            seq: b"AC\xffGT".to_vec(),
+            qual: b"II\x80II".to_vec(),
+        };
+        let mut buf = DroppedReadBuffer::new(1);
+        buf.push(Read::SingleForward(&&r), DropReason::HasN);
+
+        let batch = buf.flush().expect("flush");
+        assert_eq!(
+            string_column(&batch, "read_name").value(0),
+            "bad\u{fffd}name"
+        );
+        assert_eq!(string_column(&batch, "sequence").value(0), "AC\u{fffd}GT");
+        assert_eq!(string_column(&batch, "quality").value(0), "II\u{fffd}II");
     }
 
     #[test]
