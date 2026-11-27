@@ -8,6 +8,8 @@
 //! cargo run --release -p pixelator-core --example evaluate_staged_cell_detection -- \
 //!     --dataset 40cells --variant B1 --shuffle-seed 42
 //! ```
+//!
+//! `--k` sets the threshold of the square-root merge of variant A2 (default 1).
 
 use std::alloc::{GlobalAlloc, Layout};
 use std::env;
@@ -36,7 +38,9 @@ use pixelator_core::fast_label_propagation::strategies::{
 use pixelator_core::four_cycle_compression::algorithm::{
     FourCycleBridgeMode, four_cycle_compression,
 };
-use pixelator_core::leiden::algorithm::leiden;
+use pixelator_core::leiden::algorithm::{
+    ThresholdOptions, leiden, merge_highly_connected_nodes_until_stable,
+};
 use pixelator_core::leiden::quality::cpm::ConstantPottsModel;
 use pixelator_core::leiden::quality::modularity::Modularity;
 use pixelator_core::leiden::weighted_partitioned_graph::{
@@ -482,6 +486,16 @@ fn modularity_leiden(
     partition: LeidenNodePartitioning,
     aggregate_first: bool,
 ) -> Vec<usize> {
+    modularity_leiden_graph(graph, partition, aggregate_first).get_ancestor_to_partition_map()
+}
+
+/// As `modularity_leiden`, but returns the contracted graph Leiden ends with: one node per
+/// community, edge weights counting the original edges between two communities.
+fn modularity_leiden_graph(
+    graph: Graph<u8>,
+    partition: LeidenNodePartitioning,
+    aggregate_first: bool,
+) -> WeightedPartitionedGraph<Modularity> {
     let quality = Modularity::new(RESOLUTION, graph.get_total_edge_weight());
     let graph = Graph::<usize>::from(graph);
     let mut wp_graph =
@@ -490,7 +504,57 @@ fn modularity_leiden(
         wp_graph.aggregate(AggregateOptions::All);
     }
     leiden(&mut wp_graph, RANDOMNESS, None, None);
-    wp_graph.get_ancestor_to_partition_map()
+    wp_graph
+}
+
+/// Leiden's communities as a graph for the square-root merge: one node per community, with the
+/// community's node count as node weight. After modularity Leiden the node weights are degree
+/// sums, so they are replaced here.
+struct ContractedCommunities {
+    graph: WeightedPartitionedGraph<ConstantPottsModel>,
+    /// Contracted node of every original node.
+    contracted_of_node: Vec<usize>,
+}
+
+fn contract_leiden_communities(
+    leiden_graph: &WeightedPartitionedGraph<Modularity>,
+) -> ContractedCommunities {
+    let contracted = leiden_graph.get_graph();
+    let num_contracted = contracted.get_num_nodes();
+    // Leiden ends with every contracted node in a partition of its own.
+    let partition_of_contracted = leiden_graph.get_partitioning().get_node_to_partition_map();
+    assert_eq!(
+        leiden_graph.get_partitioning().num_partitions(),
+        num_contracted,
+        "Leiden must end with one partition per contracted node"
+    );
+    let contracted_of_partition: HashMap<usize, usize> = partition_of_contracted
+        .iter()
+        .enumerate()
+        .map(|(node, &partition)| (partition, node))
+        .collect();
+
+    let contracted_of_node: Vec<usize> = leiden_graph
+        .get_ancestor_to_partition_map()
+        .iter()
+        .map(|partition| contracted_of_partition[partition])
+        .collect();
+    let mut node_counts = vec![0usize; num_contracted];
+    for &contracted_node in &contracted_of_node {
+        node_counts[contracted_node] += 1;
+    }
+
+    let graph = WeightedPartitionedGraph::new(
+        contracted.clone(),
+        LeidenNodePartitioning::initialize_with_singlet_partitions(num_contracted),
+        ConstantPottsModel { resolution: 0.0 },
+        Some(node_counts),
+        Some(LEIDEN_SEED),
+    );
+    ContractedCommunities {
+        graph,
+        contracted_of_node,
+    }
 }
 
 /// Queue FLP as `hybrid_community_detection` runs it: one epoch, default strategy.
@@ -819,6 +883,7 @@ fn contract_groups(
 /// after its early stage.
 fn run_variant(
     variant: &str,
+    sqrt_k: f64,
     graph: Graph<u8>,
     scoring: &Scoring,
     recorder: &mut Recorder,
@@ -846,6 +911,68 @@ fn run_variant(
             Some(recorder.run("leiden", || {
                 modularity_leiden(graph, groups.into_node_partitioning(), true)
             }))
+        }
+        // B3, then the square-root merge on Leiden's communities until nothing merges.
+        "A2" => {
+            let num_nodes = graph.get_num_nodes();
+            let groups = recorder.run("four_cycle", || four_cycle_groups(&graph));
+            recorder.score_groups(scoring, &groups);
+            let leiden_graph = recorder.run("leiden", || {
+                modularity_leiden_graph(graph, groups.into_node_partitioning(), true)
+            });
+            let (communities, before, after, checks) = recorder.run("sqrt_merge", || {
+                let mut contracted = contract_leiden_communities(&leiden_graph);
+                let before = contracted.graph.get_graph().get_num_nodes();
+                let node_weight_sum: usize = contracted.graph.get_node_weights().iter().sum();
+                let inter_edge_weight: usize = contracted
+                    .graph
+                    .get_graph()
+                    .get_edges_iter()
+                    .filter(|edge| edge.src < edge.dest)
+                    .map(|edge| edge.weight)
+                    .sum();
+                merge_highly_connected_nodes_until_stable(
+                    &mut contracted.graph,
+                    ThresholdOptions::Sqrt(sqrt_k),
+                );
+                let after = contracted.graph.get_graph().get_num_nodes();
+                let merged_of_contracted = contracted.graph.get_ancestor_to_partition_map();
+                let communities: Vec<usize> = contracted
+                    .contracted_of_node
+                    .iter()
+                    .map(|&contracted_node| merged_of_contracted[contracted_node])
+                    .collect();
+                (
+                    communities,
+                    before,
+                    after,
+                    (node_weight_sum, inter_edge_weight),
+                )
+            });
+
+            // The contracted graph must describe Leiden's communities on the original graph.
+            let leiden_communities = leiden_graph.get_ancestor_to_partition_map();
+            let edges_between_communities = scoring
+                .edges
+                .iter()
+                .filter(|&&(u, v)| leiden_communities[u as usize] != leiden_communities[v as usize])
+                .count();
+            for (name, got, expected) in [
+                ("node_weight_sum", checks.0, num_nodes),
+                ("inter_edge_weight", checks.1, edges_between_communities),
+            ] {
+                let status = if got == expected { "ok" } else { "FAILED" };
+                println!("CHECK {name} got={got} expected={expected} {status}");
+                assert_eq!(got, expected, "A2 check {name} failed");
+            }
+            recorder.extras.push(("sqrt_k", sqrt_k.to_string()));
+            recorder
+                .extras
+                .push(("communities_before_merge", before.to_string()));
+            recorder
+                .extras
+                .push(("communities_after_merge", after.to_string()));
+            Some(communities)
         }
         // 4-cycle compression only, no final stage.
         "3b" => {
@@ -922,7 +1049,7 @@ fn run_variant(
         }
         other => {
             eprintln!(
-                "Unknown variant '{other}'. Use B1, B1+, B2, B3, 3b, handover, oracle-a or oracle-b."
+                "Unknown variant '{other}'. Use B1, B1+, B2, B3, A2, 3b, handover, oracle-a or oracle-b."
             );
             std::process::exit(1);
         }
@@ -965,7 +1092,7 @@ fn print_dataset_diagnostics(graph: &Graph<u8>) {
     );
 }
 
-fn run(dataset_prefix: &str, variant: &str, shuffle_seed: Option<u64>) {
+fn run(dataset_prefix: &str, variant: &str, sqrt_k: f64, shuffle_seed: Option<u64>) {
     let test_data = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test_data");
     let path_0pc = test_data.join(format!("{dataset_prefix}_0pc.parquet"));
     let path_1pc = test_data.join(format!("{dataset_prefix}_1pc.parquet"));
@@ -997,7 +1124,7 @@ fn run(dataset_prefix: &str, variant: &str, shuffle_seed: Option<u64>) {
     print_dataset_diagnostics(&graph);
 
     let mut recorder = Recorder::new();
-    let communities = run_variant(variant, graph, &scoring, &mut recorder);
+    let communities = run_variant(variant, sqrt_k, graph, &scoring, &mut recorder);
 
     let mut result = format!(
         "RESULT\tdataset={dataset_prefix}\tvariant={variant}\tseed={seed_label}\ttotal_secs={:.3}\tpeak_heap_mb={:.1}",
@@ -1089,6 +1216,7 @@ fn main() {
     let mut dataset = "40cells".to_string();
     let mut variant = "B1".to_string();
     let mut shuffle_seed: Option<u64> = Some(42);
+    let mut sqrt_k = 1.0;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -1102,6 +1230,10 @@ fn main() {
             }
             "--shuffle-seed" if i + 1 < args.len() => {
                 shuffle_seed = Some(args[i + 1].parse().expect("Invalid seed"));
+                i += 2;
+            }
+            "--k" if i + 1 < args.len() => {
+                sqrt_k = args[i + 1].parse().expect("Invalid k");
                 i += 2;
             }
             "--no-shuffle" => {
@@ -1123,5 +1255,5 @@ fn main() {
             std::process::exit(1);
         }
     };
-    run(dataset_prefix, &variant, shuffle_seed);
+    run(dataset_prefix, &variant, sqrt_k, shuffle_seed);
 }
