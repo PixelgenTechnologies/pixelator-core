@@ -1,3 +1,4 @@
+pub mod boundary_polish;
 pub mod common;
 pub mod edgelist;
 pub mod encoding;
