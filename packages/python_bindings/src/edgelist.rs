@@ -106,6 +106,10 @@ pub fn decode_dna_2bit(encoded: u64, length: usize) -> PyResult<String> {
 ///     `EdgelistSampleReport`: `input_reads`, `output_reads`, `q30_statistics`,
 ///     `dropped_by`, `reads_per_marker_1` and `reads_per_marker_2`. The caller
 ///     turns these into the sample report.
+///
+/// Raises:
+///     RuntimeError: If processing fails, including when a decoded FASTQ line
+///         is longer than 16 KiB. No output file is left behind.
 #[pyfunction]
 #[pyo3(signature = (read_forward, read_reverse, sample_name, assay, panel, output_dir, n_threads, mismatch_threshold=None, min_avg_quality=None, max_umi_base_freq=None, lbs_overlap_max_edits=6, save_dropped_reads=false))]
 #[allow(clippy::too_many_arguments)]

@@ -1,5 +1,6 @@
 mod dropped_read_buffer;
 mod extract;
+mod line_limit;
 mod processor;
 mod qc;
 mod read_layout;
@@ -25,6 +26,7 @@ use crate::common::{Assay, Panel};
 
 use dropped_read_buffer::DroppedReadBuffer;
 pub use extract::{DEFAULT_LBS_OVERLAP_MAX_EDITS, FilterConfig, LbsSearcher};
+use line_limit::{LineLengthLimit, MAX_FASTQ_LINE_BYTES};
 pub use processor::{PairedProcessor, SingleProcessor};
 pub use read_layout::Strand;
 pub use row_buffer::RowBuffer;
@@ -77,6 +79,8 @@ pub enum FastqInput {
 /// consumed; callers can observe it from another thread to report progress.
 ///
 /// Returns the run's tallies, from which the caller builds the sample report.
+/// Fails, leaving neither output file behind, if processing or writing fails,
+/// including when a decoded FASTQ line is longer than 16 KiB.
 #[allow(clippy::too_many_arguments)]
 pub fn edgelist<P: AsRef<Path>>(
     input: FastqInput,
@@ -91,31 +95,36 @@ pub fn edgelist<P: AsRef<Path>>(
 ) -> Result<EdgelistStats, Box<dyn std::error::Error>> {
     let output_dir = output_dir.as_ref();
 
+    let output = ParquetOutput {
+        path: output_dir.join(format!("{sample_name}.parquet")),
+        schema: RowBuffer::schema(),
+        properties: None,
+    };
     let (tx, rx) = sync_channel(CHANNEL_SIZE_FACTOR * n_threads);
-    let handle = spawn_parquet_writer(
-        output_dir.join(format!("{sample_name}.parquet")),
-        RowBuffer::schema(),
-        rx,
-        None,
-    );
+    let handle = output.spawn_writer(rx);
 
-    let (dropped_tx, dropped_handle) = if save_dropped_reads {
-        let (tx, rx) = sync_channel(DROPPED_CHANNEL_SIZE_FACTOR * n_threads);
+    let dropped_output = save_dropped_reads.then(|| ParquetOutput {
+        path: output_dir.join(format!("{sample_name}.dropped_reads.parquet")),
+        schema: DroppedReadBuffer::schema(),
         // Unlike the edgelist's packed integers, raw sequence and quality text
         // compresses several-fold, which is worth the writer thread's time.
-        let properties = WriterProperties::builder()
-            .set_compression(Compression::ZSTD(ZstdLevel::default()))
-            .build();
-        let handle = spawn_parquet_writer(
-            output_dir.join(format!("{sample_name}.dropped_reads.parquet")),
-            DroppedReadBuffer::schema(),
-            rx,
-            Some(properties),
-        );
-        (Some(tx), Some(handle))
-    } else {
-        (None, None)
+        properties: Some(
+            WriterProperties::builder()
+                .set_compression(Compression::ZSTD(ZstdLevel::default()))
+                .build(),
+        ),
+    });
+    let (dropped_tx, dropped_handle) = match &dropped_output {
+        Some(out) => {
+            let (tx, rx) = sync_channel(DROPPED_CHANNEL_SIZE_FACTOR * n_threads);
+            (Some(tx), Some(out.spawn_writer(rx)))
+        }
+        None => (None, None),
     };
+
+    // Every mate goes through the same ceiling, so no input can make the parser
+    // buffer a record without bound.
+    let reader = |r: BoxedReader| fastq::Reader::new(LineLengthLimit::new(r, MAX_FASTQ_LINE_BYTES));
     let (pipeline, stats) = match input {
         FastqInput::SingleForward(r) => {
             let mut proc =
@@ -123,7 +132,7 @@ pub fn edgelist<P: AsRef<Path>>(
                     .with_progress_counter(reads_processed)
                     .with_dropped_reads(dropped_tx, DROPPED_BATCH_THRESHOLD);
             (
-                fastq::Reader::new(r).process_parallel(&mut proc, n_threads),
+                reader(r).process_parallel(&mut proc, n_threads),
                 proc.into_stats(),
             )
         }
@@ -133,7 +142,7 @@ pub fn edgelist<P: AsRef<Path>>(
                     .with_progress_counter(reads_processed)
                     .with_dropped_reads(dropped_tx, DROPPED_BATCH_THRESHOLD);
             (
-                fastq::Reader::new(r).process_parallel(&mut proc, n_threads),
+                reader(r).process_parallel(&mut proc, n_threads),
                 proc.into_stats(),
             )
         }
@@ -142,11 +151,7 @@ pub fn edgelist<P: AsRef<Path>>(
                 .with_progress_counter(reads_processed)
                 .with_dropped_reads(dropped_tx, DROPPED_BATCH_THRESHOLD);
             (
-                fastq::Reader::new(r1).process_parallel_paired(
-                    fastq::Reader::new(r2),
-                    &mut proc,
-                    n_threads,
-                ),
+                reader(r1).process_parallel_paired(reader(r2), &mut proc, n_threads),
                 proc.into_stats(),
             )
         }
@@ -160,25 +165,62 @@ pub fn edgelist<P: AsRef<Path>>(
         .transpose();
 
     // Surface all errors that may have occured during processing and writing.
-    pipeline?;
-    writer?;
-    dropped_writer?;
+    let finished = (|| -> Result<(), Box<dyn std::error::Error>> {
+        pipeline?;
+        if !writer? {
+            output.write(std::iter::empty())?;
+        }
+        if let (Some(out), Some(false)) = (&dropped_output, dropped_writer?) {
+            out.write(std::iter::empty())?;
+        }
+        Ok(())
+    })();
+    if let Err(e) = finished {
+        // A failed sample leaves nothing behind that could pass for its output.
+        for out in std::iter::once(&output).chain(&dropped_output) {
+            let _ = std::fs::remove_file(&out.path);
+        }
+        return Err(e);
+    }
 
     Ok(stats)
 }
 
-/// Spawns a thread that writes every batch received on `rx` to a Parquet file at
-/// `path`, finishing once all senders are gone.
-fn spawn_parquet_writer(
+/// A Parquet file written by [`edgelist`].
+#[derive(Clone)]
+struct ParquetOutput {
     path: PathBuf,
     schema: SchemaRef,
-    rx: Receiver<RecordBatch>,
     properties: Option<WriterProperties>,
-) -> JoinHandle<Result<(), String>> {
-    thread::spawn(move || {
-        write_record_batches_to_path(path, schema, rx.into_iter(), properties)
-            .map_err(|e| e.to_string())
-    })
+}
+
+impl ParquetOutput {
+    /// Spawns a thread that writes every batch received on `rx`, finishing once
+    /// all senders are gone.
+    ///
+    /// The file is only created when the first batch arrives, so a run that
+    /// fails before producing any rows never creates it. The thread returns
+    /// whether it did.
+    fn spawn_writer(&self, rx: Receiver<RecordBatch>) -> JoinHandle<Result<bool, String>> {
+        let out = self.clone();
+        thread::spawn(move || {
+            let mut batches = rx.into_iter().peekable();
+            if batches.peek().is_none() {
+                return Ok(false);
+            }
+            out.write(batches).map(|()| true)
+        })
+    }
+
+    fn write(&self, batches: impl Iterator<Item = RecordBatch>) -> Result<(), String> {
+        write_record_batches_to_path(
+            &self.path,
+            self.schema.clone(),
+            batches,
+            self.properties.clone(),
+        )
+        .map_err(|e| e.to_string())
+    }
 }
 
 #[cfg(test)]
