@@ -37,6 +37,7 @@ use pixelator_core::four_cycle_compression::algorithm::{
     FourCycleBridgeMode, four_cycle_compression,
 };
 use pixelator_core::leiden::algorithm::leiden;
+use pixelator_core::leiden::quality::cpm::ConstantPottsModel;
 use pixelator_core::leiden::quality::modularity::Modularity;
 use pixelator_core::leiden::weighted_partitioned_graph::{
     AggregateOptions, WeightedPartitionedGraph,
@@ -514,6 +515,23 @@ fn count_detached_leaves(graph: &Graph<u8>, groups: &FastNodePartitioning) -> us
         .count()
 }
 
+/// Hand-over from stage 2 to stage 3: contracts every group to one node whose weight is its node
+/// count. Edge weights between two contracted nodes count the original edges between the groups.
+fn contract_groups(
+    graph: Graph<u8>,
+    groups: FastNodePartitioning,
+) -> WeightedPartitionedGraph<ConstantPottsModel> {
+    let mut wp_graph = WeightedPartitionedGraph::new(
+        Graph::<usize>::from(graph),
+        groups.into_node_partitioning(),
+        ConstantPottsModel { resolution: 0.0 },
+        None,
+        Some(LEIDEN_SEED),
+    );
+    wp_graph.aggregate(AggregateOptions::All);
+    wp_graph
+}
+
 /// Runs `variant` and returns the community of every node, or `None` for a variant that stops
 /// after its early stage.
 fn run_variant(
@@ -556,8 +574,46 @@ fn run_variant(
             ));
             None
         }
+        // 4-cycle compression, then the hand-over to stage 3. Checks the contracted graph.
+        "handover" => {
+            let num_nodes = graph.get_num_nodes();
+            let groups = recorder.run("four_cycle", || four_cycle_groups(&graph));
+            recorder.score_groups(scoring, &groups);
+            let fold = recorder.stages.last().unwrap().fold.as_ref().unwrap();
+            let num_groups = fold.num_groups;
+            let edges_not_folded = scoring.edges.len() - fold.crossing_folded - fold.intra_folded;
+
+            let contracted = recorder.run("handover", || contract_groups(graph, groups));
+            let contracted_nodes = contracted.get_graph().get_num_nodes();
+            let node_weight_sum: usize = contracted.get_node_weights().iter().sum();
+            let inter_edge_weight: usize = contracted
+                .get_graph()
+                .get_edges_iter()
+                .filter(|edge| edge.src < edge.dest)
+                .map(|edge| edge.weight)
+                .sum();
+            let checks = [
+                ("node_weight_sum", node_weight_sum, num_nodes),
+                ("contracted_nodes", contracted_nodes, num_groups),
+                ("inter_edge_weight", inter_edge_weight, edges_not_folded),
+            ];
+            let mut all_hold = true;
+            for (name, got, expected) in checks {
+                let holds = got == expected;
+                all_hold &= holds;
+                println!(
+                    "CHECK {name} got={got} expected={expected} {}",
+                    if holds { "ok" } else { "FAILED" }
+                );
+            }
+            let status = if all_hold { "ok" } else { "FAILED" };
+            recorder
+                .extras
+                .push(("handover_checks", status.to_string()));
+            None
+        }
         other => {
-            eprintln!("Unknown variant '{other}'. Use B1, B1+, B2, B3 or 3b.");
+            eprintln!("Unknown variant '{other}'. Use B1, B1+, B2, B3, 3b or handover.");
             std::process::exit(1);
         }
     }
