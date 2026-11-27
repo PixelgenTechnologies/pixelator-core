@@ -11,14 +11,14 @@ use pixelator_core::common::graph::Graph;
 use pixelator_core::common::node_partitioning::{
     FastNodePartitioning, LeidenNodePartitioning, NodePartitioning,
 };
-use pixelator_core::common::types::Edge;
+use pixelator_core::common::types::{Edge, EdgeWeight};
 use pixelator_core::fast_label_propagation::algorithm::fast_label_propagation;
 use pixelator_core::leiden::algorithm::leiden;
 use pixelator_core::leiden::quality::cpm::ConstantPottsModel;
 use pixelator_core::leiden::quality::modularity::Modularity;
 use pixelator_core::leiden::weighted_partitioned_graph::WeightedPartitionedGraph;
 
-pub fn read_edges_from_csv(path: &str) -> impl Iterator<Item = Edge<u8>> {
+pub fn read_edges_from_csv<T: EdgeWeight>(path: &str) -> impl Iterator<Item = Edge<T>> {
     let file = File::open(path).expect("Failed to open CSV file");
     let mut rdr = Reader::from_reader(file);
 
@@ -56,7 +56,7 @@ pub fn read_partitions_from_csv(path: &str) -> Vec<usize> {
     partitions
 }
 
-fn load_graph_from_edgelist_csv() -> Graph<u8> {
+fn load_graph_from_edgelist_csv<T: EdgeWeight>() -> Graph<T> {
     let mut edgelist_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     edgelist_path.push("test_data/sbm_graph.edgelist.csv");
 
@@ -65,7 +65,7 @@ fn load_graph_from_edgelist_csv() -> Graph<u8> {
             .to_str()
             .expect("Failed to convert PathBuf to &str"),
     );
-    Graph::<u8>::from_edges(edges, 3000)
+    Graph::<T>::from_edges(edges, 3000)
 }
 
 fn load_partitions_from_csv() -> LeidenNodePartitioning {
@@ -82,7 +82,7 @@ fn load_partitions_from_csv() -> LeidenNodePartitioning {
 
 #[divan::bench(sample_count = 100)]
 fn bench_fast_label_propagation(bencher: Bencher) {
-    let graph: Graph<u8> = Into::<Graph<u8>>::into(load_graph_from_edgelist_csv());
+    let graph = load_graph_from_edgelist_csv::<u8>();
     let partitioning =
         FastNodePartitioning::initialize_with_singlet_partitions(graph.get_num_nodes());
 
@@ -97,7 +97,7 @@ fn bench_fast_label_propagation(bencher: Bencher) {
 #[ignore]
 #[divan::bench(sample_count = 10)]
 fn bench_leiden_cpm(bencher: Bencher) {
-    let graph: Graph<usize> = Into::<Graph<usize>>::into(load_graph_from_edgelist_csv());
+    let graph = load_graph_from_edgelist_csv::<usize>();
     let partitioning: LeidenNodePartitioning = load_partitions_from_csv();
     let quality = ConstantPottsModel { resolution: 0.1 };
     let randomness = 1.;
@@ -108,7 +108,7 @@ fn bench_leiden_cpm(bencher: Bencher) {
 
 #[divan::bench(sample_count = 100)]
 fn bench_leiden_modularity(bencher: Bencher) {
-    let graph: Graph<usize> = Into::<Graph<usize>>::into(load_graph_from_edgelist_csv());
+    let graph = load_graph_from_edgelist_csv::<usize>();
     let partitioning: LeidenNodePartitioning = load_partitions_from_csv();
     let quality = Modularity::new(0.1, graph.get_total_edge_weight());
     let randomness = 1.;

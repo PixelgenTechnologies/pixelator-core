@@ -6,7 +6,7 @@
 //!
 
 use crate::common::constants::MIN_PNA_COMPONENT_SIZE;
-use crate::common::{graph::Graph, types::EdgeWeight};
+use crate::common::graph::Graph;
 use itertools::Itertools;
 use rustc_hash::FxHashMap as HashMap;
 
@@ -29,7 +29,10 @@ pub struct GraphProperties {
 
 impl GraphProperties {
     /// Computes graph properties for the given graph.
-    pub fn new<T: EdgeWeight>(graph: &Graph<T>) -> Self {
+    ///
+    /// Takes `Graph<usize>` because `u8` weights saturate on duplicate edges, which
+    /// would make `edge_weight_sum` undercount.
+    pub fn new(graph: &Graph<usize>) -> Self {
         let node_count = graph.get_num_nodes();
         let edge_weight_sum = graph.get_total_edge_weight();
 
@@ -77,7 +80,7 @@ mod tests {
     fn test_graph_properties_single_component() {
         // Graph: 0-1-2
         let edges = edges_from_tuples(vec![(0, 1), (1, 2)]);
-        let graph = Graph::<u8>::from_edges(edges.into_iter(), 3);
+        let graph = Graph::<usize>::from_edges(edges.into_iter(), 3);
         let props = GraphProperties::new(&graph);
         assert_eq!(props.node_count, 3);
         assert_eq!(props.edge_weight_sum, 2);
@@ -89,7 +92,7 @@ mod tests {
     fn test_graph_properties_multiple_components() {
         // Graph: 0-1  2 (isolated)
         let edges = edges_from_tuples(vec![(0, 1)]);
-        let graph = Graph::<u8>::from_edges(edges.into_iter(), 3);
+        let graph = Graph::<usize>::from_edges(edges.into_iter(), 3);
         let props = GraphProperties::new(&graph);
         assert_eq!(props.node_count, 3);
         assert_eq!(props.edge_weight_sum, 1);
@@ -101,8 +104,8 @@ mod tests {
     #[test]
     fn test_graph_properties_all_isolated() {
         // Graph: 0 1 2 (all isolated)
-        let edges: Vec<Edge<u8>> = vec![];
-        let graph = Graph::<u8>::from_edges(edges.into_iter(), 3);
+        let edges: Vec<Edge<usize>> = vec![];
+        let graph = Graph::<usize>::from_edges(edges.into_iter(), 3);
         let props = GraphProperties::new(&graph);
         assert_eq!(props.node_count, 3);
         assert_eq!(props.edge_weight_sum, 0);
@@ -114,7 +117,7 @@ mod tests {
     fn test_graph_properties_component_size_distribution() {
         // Graph: 0-1-2  3 (isolated)  4-5
         let edges = edges_from_tuples(vec![(0, 1), (1, 2), (4, 5)]);
-        let graph = Graph::<u8>::from_edges(edges.into_iter(), 6);
+        let graph = Graph::<usize>::from_edges(edges.into_iter(), 6);
         let props = GraphProperties::new(&graph);
 
         let expected: HashMap<usize, usize> = [(3, 1), (1, 1), (2, 1)].into_iter().collect();

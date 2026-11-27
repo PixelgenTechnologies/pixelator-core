@@ -7,33 +7,35 @@ use std::time::Instant;
 use crate::common::cancellation::checkpoint;
 use crate::common::graph::Graph;
 use crate::common::node_partitioning::NodePartitioning;
-use crate::common::types::NodeIdx;
+use crate::common::types::{EdgeWeight, NodeIdx};
 use crate::common::utils::NodeQueue;
 use crate::fast_label_propagation::strategies::AssignmentStrategy;
 
-pub fn fast_label_propagation<P>(
-    graph: &Graph<u8>,
+pub fn fast_label_propagation<P, T>(
+    graph: &Graph<T>,
     epochs: u64,
-    assignment_strategy: &dyn AssignmentStrategy<P>,
+    assignment_strategy: &dyn AssignmentStrategy<P, T>,
     mut node_partition: P,
 ) -> P
 where
     P: NodePartitioning,
+    T: EdgeWeight,
 {
     for epoch in 0..epochs {
         info!("Starting epoch {}...", epoch + 1);
-        node_partition = label_propagation_epoch::<P>(graph, node_partition, assignment_strategy);
+        node_partition = label_propagation_epoch(graph, node_partition, assignment_strategy);
     }
     node_partition
 }
 
-pub fn label_propagation_epoch<P>(
-    graph: &Graph<u8>,
+pub fn label_propagation_epoch<P, T>(
+    graph: &Graph<T>,
     mut node_partition: P,
-    assignment_strategy: &dyn AssignmentStrategy<P>,
+    assignment_strategy: &dyn AssignmentStrategy<P, T>,
 ) -> P
 where
     P: NodePartitioning,
+    T: EdgeWeight,
 {
     let mut nodes: Vec<NodeIdx> = (0..graph.get_num_nodes()).collect();
     nodes.shuffle(&mut rand::rng());
@@ -92,9 +94,10 @@ fn update_progress_bar(
 }
 
 /// Split disconnected partitions into their individual components
-pub fn clean_partitions<P>(graph: &Graph<u8>, node_partition: P) -> P
+pub fn clean_partitions<P, T>(graph: &Graph<T>, node_partition: P) -> P
 where
     P: NodePartitioning,
+    T: EdgeWeight,
 {
     info!("Cleaning partitions by splitting disconnected components...");
     let labels = graph.connected_components_by(|src_node, node| {
@@ -163,7 +166,7 @@ mod tests {
 
     #[test]
     fn test_flp() {
-        let graph = get_example_graph();
+        let graph = get_example_graph::<u8>();
         let num_nodes = graph.get_num_nodes();
         let partitioning = FastNodePartitioning::initialize_with_singlet_partitions(num_nodes);
 
@@ -226,7 +229,7 @@ mod tests {
         let edges = vec![];
         let num_nodes = 3;
         let edge_iter = edges_from_tuples(edges.clone());
-        let graph = Graph::from_edges(edge_iter, num_nodes);
+        let graph = Graph::<u8>::from_edges(edge_iter, num_nodes);
 
         let partitioning = FastNodePartitioning::initialize_with_singlet_partitions(num_nodes);
 
@@ -243,7 +246,7 @@ mod tests {
         let n_nodes = 1000;
         let n_edges = 2 * n_nodes;
         let seed = 0;
-        let graph = get_random_graph(n_nodes, n_edges, seed);
+        let graph = get_random_graph::<u8>(n_nodes, n_edges, seed);
 
         let partitioning = FastNodePartitioning::initialize_with_singlet_partitions(n_nodes);
 

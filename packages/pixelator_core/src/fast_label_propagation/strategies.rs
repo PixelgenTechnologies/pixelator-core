@@ -2,13 +2,13 @@ use smallvec::SmallVec;
 
 use crate::common::graph::Graph;
 use crate::common::node_partitioning::{FastNodePartitioning, NodePartitioning};
-use crate::common::types::NodeIdx;
+use crate::common::types::{EdgeWeight, NodeIdx};
 use crate::common::utils::{NodeQueue, mode_via_sort};
 
-pub trait AssignmentStrategy<P> {
+pub trait AssignmentStrategy<P, T: EdgeWeight = u8> {
     fn assign(
         &self,
-        graph: &Graph<u8>,
+        graph: &Graph<T>,
         node_partition: &mut P,
         node_queue: &mut NodeQueue,
         current_node: NodeIdx,
@@ -17,10 +17,10 @@ pub trait AssignmentStrategy<P> {
 
 pub struct DefaultAssignmentStrategy;
 
-impl AssignmentStrategy<FastNodePartitioning> for DefaultAssignmentStrategy {
+impl<T: EdgeWeight> AssignmentStrategy<FastNodePartitioning, T> for DefaultAssignmentStrategy {
     fn assign(
         &self,
-        graph: &Graph<u8>,
+        graph: &Graph<T>,
         node_partition: &mut FastNodePartitioning,
         node_queue: &mut NodeQueue,
         current_node: NodeIdx,
@@ -79,7 +79,7 @@ mod tests {
     fn test_assign_fastnodepartitioning_partition_update() {
         // Create a simple graph: 0-1, 0-2, 1-2
         let edges = edges_from_tuples(vec![(0, 1), (0, 2), (1, 2)]);
-        let graph = Graph::from_edges(edges.into_iter(), 3);
+        let graph = Graph::<u8>::from_edges(edges.into_iter(), 3);
 
         // Initial partition: node 0 in 0, node 1 in 1, node 2 in 2
         let mut partition = FastNodePartitioning::initialize_with_singlet_partitions(3);

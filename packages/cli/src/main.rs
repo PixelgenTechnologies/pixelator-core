@@ -107,7 +107,7 @@ fn main() {
             info!("Input arguments were:");
             info!("  Parquet file: {}", parquet_file);
 
-            let (_, graph) = create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
+            let (_, graph) = create_graph_and_umi_mapping_from_parquet_file::<usize>(parquet_file);
 
             let graph_properties = GraphProperties::new(&graph);
             info!("Graph properties:");

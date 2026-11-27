@@ -18,8 +18,8 @@ use log::debug;
 ///
 /// # Arguments
 ///
-/// * `graph` — Edge-weighted graph (`u8` per-edge weights), typically the raw adjacency before
-///   aggregation.
+/// * `graph` — Edge-weighted graph, typically the raw adjacency before aggregation. Its total
+///   edge weight must match the one used to build `quality_function`.
 /// * `quality_function` — Quality metric (e.g. modularity) used for the weighted partitioned
 ///   graph after FLP; drives node sizes and resolution during aggregation and Leiden.
 /// * `randomness` - Randomness of node transitions. Low values will favor moves maximizing the
@@ -44,7 +44,7 @@ use log::debug;
 ///   when Leiden was skipped.
 #[allow(clippy::too_many_arguments)]
 pub fn hybrid_community_detection(
-    graph: Graph<u8>,
+    graph: Graph<usize>,
     quality_function: impl QualityMetrics,
     randomness: f64,
     seed: Option<u64>,
@@ -62,9 +62,9 @@ pub fn hybrid_community_detection(
 
     let node_partition =
         FastNodePartitioning::initialize_with_singlet_partitions(graph.get_num_nodes());
-    let assignment_strategy: &dyn AssignmentStrategy<_> = &DefaultAssignmentStrategy;
+    let assignment_strategy: &dyn AssignmentStrategy<_, usize> = &DefaultAssignmentStrategy;
 
-    let node_partition = fast_label_propagation::<FastNodePartitioning>(
+    let node_partition = fast_label_propagation::<FastNodePartitioning, usize>(
         &graph,
         flp_epochs,
         assignment_strategy,
@@ -76,7 +76,6 @@ pub fn hybrid_community_detection(
         node_partition.num_partitions(),
     );
 
-    let graph = Graph::<usize>::from(graph);
     let partition = NodePartitioning::into_node_partitioning(node_partition);
 
     let mut wp_graph =
@@ -122,7 +121,7 @@ mod tests {
 
     #[test]
     fn test_hybrid_community_detection() {
-        let graph = get_example_graph::<u8>();
+        let graph = get_example_graph::<usize>();
         let num_nodes = graph.get_num_nodes();
         let quality = Modularity::new(0.1, graph.get_total_edge_weight());
         let randomness = 1.;
@@ -139,7 +138,7 @@ mod tests {
 
     #[test]
     fn test_hybrid_community_detection_empty_graph() {
-        let graph = Graph::<u8>::from_edges(edges_from_tuples(vec![]), 0);
+        let graph = Graph::<usize>::from_edges(edges_from_tuples(vec![]), 0);
         let quality = Modularity::new(0.5, graph.get_total_edge_weight());
 
         let (result_partition, _, stats) =
@@ -159,7 +158,7 @@ mod tests {
         let edges = vec![(0, 1), (1, 2), (2, 0), (3, 4), (4, 5), (5, 3)];
         let num_nodes = 6;
         let edge_iter = edges_from_tuples(edges.clone());
-        let graph = Graph::<u8>::from_edges(edge_iter, num_nodes);
+        let graph = Graph::<usize>::from_edges(edge_iter, num_nodes);
 
         let quality = Modularity::new(0.5, graph.get_total_edge_weight());
         let randomness = 1.;
@@ -178,7 +177,7 @@ mod tests {
 
     #[test]
     fn test_hybrid_community_detection_2_communities() {
-        let graph = get_2_communities_graph::<u8>();
+        let graph = get_2_communities_graph::<usize>();
         let num_nodes = graph.get_num_nodes();
         let quality = Modularity::new(0.5, graph.get_total_edge_weight());
         let randomness = 1.;
