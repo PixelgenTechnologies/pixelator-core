@@ -34,9 +34,9 @@ mod tests {
 
     #[test]
     fn hamming_distance_counts_symbol_mismatches() {
-        let a = encode_dna_2bit(b"ACGTAC");
-        let b = encode_dna_2bit(b"ACATAG");
-        let c = encode_dna_2bit(b"TCATAG");
+        let a = encode_dna_2bit(b"ACGTAC").unwrap();
+        let b = encode_dna_2bit(b"ACATAG").unwrap();
+        let c = encode_dna_2bit(b"TCATAG").unwrap();
 
         assert_eq!(hamming_distance_2bit(a, b), 2);
         assert_eq!(hamming_distance_2bit(a, c), 3);
@@ -44,8 +44,8 @@ mod tests {
 
     #[test]
     fn hamming_distance_is_symmetric_and_zero_for_equal_values() {
-        let a = encode_dna_2bit(b"GATTACA");
-        let b = encode_dna_2bit(b"GACTATA");
+        let a = encode_dna_2bit(b"GATTACA").unwrap();
+        let b = encode_dna_2bit(b"GACTATA").unwrap();
 
         assert_eq!(hamming_distance_2bit(a, a), 0);
         assert_eq!(hamming_distance_2bit(a, b), hamming_distance_2bit(b, a));
@@ -53,16 +53,16 @@ mod tests {
 
     #[test]
     fn hamming_distance_counts_all_mismatches_for_same_length_sequences() {
-        let a = encode_dna_2bit(b"AAAAAA");
-        let b = encode_dna_2bit(b"TTTTTT");
+        let a = encode_dna_2bit(b"AAAAAA").unwrap();
+        let b = encode_dna_2bit(b"TTTTTT").unwrap();
         assert_eq!(hamming_distance_2bit(a, b), 6);
     }
 
     #[test]
     fn within_hamming_distance_respects_threshold_boundaries() {
-        let a = encode_dna_2bit(b"ACGTAC");
-        let b = encode_dna_2bit(b"ACATAG"); // distance 2
-        let c = encode_dna_2bit(b"TCATAG"); // distance 3
+        let a = encode_dna_2bit(b"ACGTAC").unwrap();
+        let b = encode_dna_2bit(b"ACATAG").unwrap(); // distance 2
+        let c = encode_dna_2bit(b"TCATAG").unwrap(); // distance 3
 
         assert!(within_hamming_distance(a, b, 2));
         assert!(within_hamming_distance(a, b, 3));
@@ -81,8 +81,8 @@ mod tests {
         ];
 
         for (lhs, rhs) in pairs {
-            let a = encode_dna_2bit(lhs);
-            let b = encode_dna_2bit(rhs);
+            let a = encode_dna_2bit(lhs).unwrap();
+            let b = encode_dna_2bit(rhs).unwrap();
             let distance = hamming_distance_2bit(a, b);
 
             for threshold in 0..=8 {

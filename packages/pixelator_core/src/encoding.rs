@@ -1,39 +1,83 @@
-/// Maps a single DNA base (as an ASCII byte) to its 2-bit code, panicking on
-/// non-ACGT input.
-///
-/// Matches the Python LUT from pixelator:
-/// A -> [0, 0], C -> [1, 0], G -> [0, 1], T -> [1, 1]
-fn base_to_2bit(base: u8) -> u64 {
-    match base {
-        b'A' => 0b00u64,
-        b'C' => 0b01u64,
-        b'G' => 0b10u64,
-        b'T' => 0b11u64,
-        _ => panic!("Unsupported DNA base: {}", base as char),
+use std::fmt;
+
+/// The most bases a `u64` can hold at 2 bits per base.
+pub const MAX_ENCODED_BASES: usize = 32;
+
+/// Why a sequence could not be 2-bit encoded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EncodeError {
+    /// The sequence contains a byte other than uppercase `A`, `C`, `G` or `T`.
+    UnsupportedBase(u8),
+    /// The sequence is longer than [`MAX_ENCODED_BASES`].
+    TooLong(usize),
+}
+
+impl fmt::Display for EncodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnsupportedBase(base) => {
+                write!(f, "Unsupported DNA base: '{}'", base.escape_ascii())
+            }
+            Self::TooLong(len) => write!(
+                f,
+                "Cannot encode {len} bases into a u64 (at most {MAX_ENCODED_BASES})"
+            ),
+        }
     }
 }
 
-/// Packs a DNA sequence into a 2-bit-per-base integer in little-endian symbol
-/// order (the first base occupies the lowest bits). Panics on non-ACGT input.
+impl std::error::Error for EncodeError {}
+
+/// Maps a single DNA base (as an ASCII byte) to its 2-bit code.
 ///
-/// The result is a `u64`, so sequences of up to 32 bases fit; longer sequences
-/// overflow the shift.
-pub fn encode_dna_2bit(dna: &[u8]) -> u64 {
-    dna.iter().enumerate().fold(0u64, |acc, (idx, &base)| {
-        acc | (base_to_2bit(base) << (2 * idx))
+/// Matches the Python LUT from pixelator:
+/// A -> [0, 0], C -> [1, 0], G -> [0, 1], T -> [1, 1]
+fn base_to_2bit(base: u8) -> Result<u64, EncodeError> {
+    match base {
+        b'A' => Ok(0b00u64),
+        b'C' => Ok(0b01u64),
+        b'G' => Ok(0b10u64),
+        b'T' => Ok(0b11u64),
+        _ => Err(EncodeError::UnsupportedBase(base)),
+    }
+}
+
+fn check_len(dna: &[u8]) -> Result<(), EncodeError> {
+    if dna.len() > MAX_ENCODED_BASES {
+        return Err(EncodeError::TooLong(dna.len()));
+    }
+    Ok(())
+}
+
+/// Packs a DNA sequence into a 2-bit-per-base integer in little-endian symbol
+/// order (the first base occupies the lowest bits).
+///
+/// # Errors
+///
+/// Returns an error if `dna` contains anything but uppercase `A`, `C`, `G` and
+/// `T`, or is longer than [`MAX_ENCODED_BASES`].
+pub fn encode_dna_2bit(dna: &[u8]) -> Result<u64, EncodeError> {
+    check_len(dna)?;
+    dna.iter().enumerate().try_fold(0u64, |acc, (idx, &base)| {
+        Ok(acc | (base_to_2bit(base)? << (2 * idx)))
     })
 }
 
 /// Encodes the reverse complement of a DNA sequence directly, without building
-/// an intermediate buffer. Panics on non-ACGT input.
+/// an intermediate buffer.
 ///
 /// In this scheme, complementing a base is a XOR with `0b11` (A<->T, C<->G),
 /// and reversing places the base at index `idx` at symbol position
 /// `n - 1 - idx`.
-pub fn encode_dna_2bit_rc(dna: &[u8]) -> u64 {
+///
+/// # Errors
+///
+/// Same as [`encode_dna_2bit`].
+pub fn encode_dna_2bit_rc(dna: &[u8]) -> Result<u64, EncodeError> {
+    check_len(dna)?;
     let n = dna.len();
-    dna.iter().enumerate().fold(0u64, |acc, (idx, &base)| {
-        acc | ((base_to_2bit(base) ^ 0b11) << (2 * (n - 1 - idx)))
+    dna.iter().enumerate().try_fold(0u64, |acc, (idx, &base)| {
+        Ok(acc | ((base_to_2bit(base)? ^ 0b11) << (2 * (n - 1 - idx))))
     })
 }
 
@@ -51,9 +95,12 @@ fn bit_to_base(bits: u8) -> u8 {
 /// Unpacks a 2-bit-per-base integer back into `length` DNA bases, the inverse of
 /// [`encode_dna_2bit`]. Bits above `2 * length` are ignored.
 ///
-/// Panics if `length` exceeds 32, the most bases a `u64` can hold.
+/// Panics if `length` exceeds [`MAX_ENCODED_BASES`].
 pub fn decode_dna_2bit(encoded: u64, length: usize) -> Vec<u8> {
-    assert!(length <= 32, "Cannot decode {length} bases from a u64");
+    assert!(
+        length <= MAX_ENCODED_BASES,
+        "Cannot decode {length} bases from a u64"
+    );
     (0..length)
         .map(|idx| bit_to_base(((encoded >> (2 * idx)) & 0b11) as u8))
         .collect()
@@ -65,25 +112,40 @@ mod tests {
 
     #[test]
     fn encode_dna_2bit_matches_base_mapping() {
-        assert_eq!(encode_dna_2bit(b"A"), 0);
-        assert_eq!(encode_dna_2bit(b"C"), 1);
-        assert_eq!(encode_dna_2bit(b"G"), 2);
-        assert_eq!(encode_dna_2bit(b"T"), 3);
+        assert_eq!(encode_dna_2bit(b"A"), Ok(0));
+        assert_eq!(encode_dna_2bit(b"C"), Ok(1));
+        assert_eq!(encode_dna_2bit(b"G"), Ok(2));
+        assert_eq!(encode_dna_2bit(b"T"), Ok(3));
     }
 
     #[test]
     fn encode_dna_2bit_packs_bases_in_little_endian_symbol_order() {
         // "ACGT" -> A(00), C(01), G(10), T(11)
         // packed as: 00 | 01<<2 | 10<<4 | 11<<6 = 0b1110_0100 = 228
-        assert_eq!(encode_dna_2bit(b"ACGT"), 228);
+        assert_eq!(encode_dna_2bit(b"ACGT"), Ok(228));
         // Empty input should encode to 0.
-        assert_eq!(encode_dna_2bit(b""), 0);
+        assert_eq!(encode_dna_2bit(b""), Ok(0));
     }
 
     #[test]
-    #[should_panic(expected = "Unsupported DNA base")]
     fn encode_dna_2bit_rejects_invalid_bases() {
-        let _ = encode_dna_2bit(b"AN");
+        for base in [b'N', b'n', b'a', b'R', b'0', b'-', 0xff] {
+            assert_eq!(
+                encode_dna_2bit(&[b'A', base]),
+                Err(EncodeError::UnsupportedBase(base))
+            );
+        }
+    }
+
+    #[test]
+    fn encode_dna_2bit_rejects_sequences_beyond_u64() {
+        assert_eq!(encode_dna_2bit(&[b'A'; 33]), Err(EncodeError::TooLong(33)));
+        assert_eq!(
+            encode_dna_2bit_rc(&[b'A'; 33]),
+            Err(EncodeError::TooLong(33))
+        );
+        assert!(encode_dna_2bit(&[b'T'; 32]).is_ok());
+        assert!(encode_dna_2bit_rc(&[b'T'; 32]).is_ok());
     }
 
     #[test]
@@ -96,13 +158,17 @@ mod tests {
         // RC of a single base is its complement.
         assert_eq!(encode_dna_2bit_rc(b"A"), encode_dna_2bit(b"T"));
         // Empty input encodes to 0.
-        assert_eq!(encode_dna_2bit_rc(b""), 0);
+        assert_eq!(encode_dna_2bit_rc(b""), Ok(0));
     }
 
     #[test]
-    #[should_panic(expected = "Unsupported DNA base")]
     fn encode_dna_2bit_rc_rejects_invalid_bases() {
-        let _ = encode_dna_2bit_rc(b"AN");
+        for base in [b'N', b'n', b'a', b'R', b'0', b'-', 0xff] {
+            assert_eq!(
+                encode_dna_2bit_rc(&[b'A', base]),
+                Err(EncodeError::UnsupportedBase(base))
+            );
+        }
     }
 
     #[test]
@@ -143,7 +209,10 @@ mod tests {
             b"ACGTACGTACGTACGTACGTACGTACGTACGT", // 32 bases
         ];
         for seq in sequences {
-            assert_eq!(decode_dna_2bit(encode_dna_2bit(seq), seq.len()), seq);
+            assert_eq!(
+                decode_dna_2bit(encode_dna_2bit(seq).unwrap(), seq.len()),
+                seq
+            );
         }
     }
 
@@ -157,14 +226,17 @@ mod tests {
                 u64::MAX >> (64 - 2 * length)
             };
             let masked = value & mask;
-            assert_eq!(encode_dna_2bit(&decode_dna_2bit(masked, length)), masked);
+            assert_eq!(
+                encode_dna_2bit(&decode_dna_2bit(masked, length)),
+                Ok(masked)
+            );
         }
     }
 
     #[test]
     fn decode_of_rc_encoding_is_reverse_complement() {
         assert_eq!(
-            decode_dna_2bit(encode_dna_2bit_rc(b"ACTTCCTAGG"), 10),
+            decode_dna_2bit(encode_dna_2bit_rc(b"ACTTCCTAGG").unwrap(), 10),
             b"CCTAGGAAGT"
         );
     }

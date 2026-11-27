@@ -214,7 +214,7 @@ mod tests {
     }
 
     fn umi(seq: &[u8]) -> UMI {
-        encode_dna_2bit(seq) as UMI
+        encode_dna_2bit(seq).unwrap() as UMI
     }
 
     fn mapped_graph(umi_edges: &[(UMI, UMI)]) -> (Graph<u8>, UmiToNodeIndexMapping) {
@@ -348,7 +348,7 @@ mod tests {
         // A is one symbol from B and two from H, so with threshold 1 it matches B
         // and skips H. B is one symbol from H and matches H. The chain A -> B -> H
         // must come out already flattened, with both leaves naming H.
-        let umi = |seq: &[u8]| encode_dna_2bit(seq) as UMI;
+        let umi = |seq: &[u8]| encode_dna_2bit(seq).unwrap() as UMI;
         let umi_m = umi(b"GGGG");
         let umi_h = umi(b"CCAA");
         let umi_a = umi(b"AAAA");

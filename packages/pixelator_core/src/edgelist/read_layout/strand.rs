@@ -1,5 +1,5 @@
 use crate::common::Assay;
-use crate::encoding::{encode_dna_2bit, encode_dna_2bit_rc};
+use crate::encoding::{EncodeError, encode_dna_2bit, encode_dna_2bit_rc};
 
 /// The orientation of a read relative to the amplicon.
 ///
@@ -34,7 +34,11 @@ impl Strand {
     /// Forward reads encode the bases as-is; reverse reads are
     /// reverse-complemented first, so both orientations yield the same code for
     /// the same molecule and panel lookups stay orientation-agnostic.
-    pub fn encode(&self, dna: &[u8]) -> u64 {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `dna` cannot be packed (see [`encode_dna_2bit`]).
+    pub fn encode(&self, dna: &[u8]) -> Result<u64, EncodeError> {
         match self {
             Self::Forward => encode_dna_2bit(dna),
             Self::Reverse => encode_dna_2bit_rc(dna),
@@ -63,7 +67,7 @@ mod tests {
         let r_strand = Strand::Reverse;
 
         let dna = b"AACC";
-        assert_eq!(f_strand.encode(dna), 80);
-        assert_eq!(r_strand.encode(dna), 250);
+        assert_eq!(f_strand.encode(dna), Ok(80));
+        assert_eq!(r_strand.encode(dna), Ok(250));
     }
 }

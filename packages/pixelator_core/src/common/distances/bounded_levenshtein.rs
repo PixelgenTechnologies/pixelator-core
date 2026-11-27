@@ -134,9 +134,9 @@ mod tests {
 
     fn matches(pattern: &[u8], text: &[u8], k: u32) -> bool {
         within_bounded_levenshtein(
-            encode_dna_2bit(pattern),
+            encode_dna_2bit(pattern).unwrap(),
             pattern.len(),
-            encode_dna_2bit(text),
+            encode_dna_2bit(text).unwrap(),
             text.len(),
             k,
         )
