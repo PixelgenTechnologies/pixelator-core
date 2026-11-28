@@ -13,5 +13,8 @@ pub mod utils;
 
 pub mod test_utils;
 
+#[cfg(test)]
+mod footer_row_count;
+
 pub use assay::Assay;
 pub use panel::{Panel, PanelMarker};
