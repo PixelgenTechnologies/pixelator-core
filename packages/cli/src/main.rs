@@ -3,7 +3,7 @@ use std::time::Instant;
 use clap::Parser;
 use clap::Subcommand;
 use env_logger::{Builder, Env};
-use log::{debug, info};
+use log::{debug, error, info};
 
 use pixelator_core::common::graph::GraphProperties;
 use pixelator_core::common::io::create_graph_and_umi_mapping_from_parquet_file;
@@ -88,7 +88,8 @@ fn main() {
             output,
         }) => {
             let res = run_flp(parquet_file, epochs, output);
-            if res.is_err() {
+            if let Err(e) = res {
+                error!("{e}");
                 std::process::exit(1);
             }
         }
@@ -98,7 +99,8 @@ fn main() {
             output,
         }) => {
             let res = run_leiden(parquet_file, *resolution, 1.0, Some(1), None, output);
-            if res.is_err() {
+            if let Err(e) = res {
+                error!("{e}");
                 std::process::exit(1);
             }
         }
@@ -107,7 +109,13 @@ fn main() {
             info!("Input arguments were:");
             info!("  Parquet file: {}", parquet_file);
 
-            let (_, graph) = create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
+            let graph = match create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file) {
+                Ok((_, graph)) => graph,
+                Err(e) => {
+                    error!("{e}");
+                    std::process::exit(1);
+                }
+            };
 
             let graph_properties = GraphProperties::new(&graph);
             info!("Graph properties:");
@@ -144,7 +152,7 @@ fn run_flp(
     let epochs = epochs.unwrap_or(1);
 
     info!("Starting label propagation adjacency matrix construction...");
-    let (mapping, graph) = create_graph_and_umi_mapping_from_parquet_file(parquet_file);
+    let (mapping, graph) = create_graph_and_umi_mapping_from_parquet_file(parquet_file)?;
 
     let node_partition =
         FastNodePartitioning::initialize_with_singlet_partitions(graph.get_num_nodes());
@@ -182,7 +190,7 @@ fn run_leiden(
     info!("  Parquet file: {}", parquet_file);
 
     let start_time = Instant::now();
-    let (mapping, graph) = create_graph_and_umi_mapping_from_parquet_file(parquet_file);
+    let (mapping, graph) = create_graph_and_umi_mapping_from_parquet_file(parquet_file)?;
 
     let node_partition =
         NodePartitioning::initialize_with_singlet_partitions(graph.get_num_nodes());

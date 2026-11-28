@@ -106,6 +106,11 @@ impl UmiToNodeIndexMapping {
         self.umi_to_node_idx[&umi]
     }
 
+    /// Return the node index for `umi`, or `None` if it is not in the mapping.
+    pub fn get_node_index(&self, umi: UMI) -> Option<NodeIdx> {
+        self.umi_to_node_idx.get(&umi).copied()
+    }
+
     pub fn map_umi_pair_iterator_to_edge<I, T>(&self, edges: I) -> impl Iterator<Item = Edge<T>>
     where
         I: IntoIterator<Item = UMIPair>,
