@@ -558,13 +558,16 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 name = "community-detection"
 version = "3.0.0"
 dependencies = [
+ "arrow",
  "clap",
  "env_logger",
  "indicatif",
  "log",
  "mimalloc",
+ "parquet",
  "pixelator-core",
  "rand",
+ "tempfile",
 ]
 
 [[package]]
