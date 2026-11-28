@@ -19,10 +19,12 @@ use crate::common::types::{EdgeWeight, NodeIdx, UMI, UMIPair};
 
 /// An iterator that yields UMI pairs from a parquet file one by one.
 /// These can be mapped to node indices and used to construct a graph.
+///
+/// The footer row count is not trusted: the size hint only covers rows that
+/// have already been decoded, so callers never reserve memory for rows that a
+/// crafted file claims to hold but does not.
 pub struct ParquetUMIPairIter {
     reader: ParquetRecordBatchReader,
-
-    expected_size: i64,
 
     // Buffers for the currently loaded batch
     // We hold the specific typed arrays to avoid downcasting on every row
@@ -39,12 +41,10 @@ impl ParquetUMIPairIter {
         let file = File::open(path)?;
 
         let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
-        let num_rows = builder.metadata().file_metadata().num_rows();
         let reader = builder.with_batch_size(8192).build()?;
 
         Ok(Self {
             reader,
-            expected_size: num_rows,
             col_src: None,
             col_dst: None,
             current_idx: 0,
@@ -99,12 +99,9 @@ impl Iterator for ParquetUMIPairIter {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let len = self.expected_size as usize;
-        (len, Some(len))
+        (self.batch_len.saturating_sub(self.current_idx), None)
     }
 }
-
-impl ExactSizeIterator for ParquetUMIPairIter {}
 
 /// Write an iterator of record batches to a parquet file at the given path.
 ///
@@ -267,9 +264,7 @@ where
 {
     info!("Creating UMI mapping and graph edges...");
     let pairs = ParquetUMIPairIter::new(parquet_file).expect("Failed to create ParquetUMIPairIter");
-    // Mean degree about 3, so the node count is near 2E/3.
-    let num_pairs = pairs.size_hint().0;
-    let mut umi_mapping = UmiToNodeIndexMapping::with_capacity(num_pairs.saturating_mul(2) / 3);
+    let mut umi_mapping = UmiToNodeIndexMapping::with_capacity(0);
     let triplets: Vec<(NodeIdx, NodeIdx, T)> = pairs
         .map(|(src, dest)| {
             let (src, dest) = (
