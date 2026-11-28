@@ -293,6 +293,10 @@ where
 }
 
 #[cfg(test)]
+#[path = "malformed_edgelist_tests.rs"]
+mod malformed_edgelist_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
