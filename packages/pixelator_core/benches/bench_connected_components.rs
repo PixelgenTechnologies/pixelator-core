@@ -9,7 +9,8 @@ fn load_graph() -> Graph<u8> {
     path.push("test_data/mix_40cells_0pc.parquet");
     let (_mapping, graph) = create_graph_and_umi_mapping_from_parquet_file::<u8>(
         path.to_str().expect("Failed to convert PathBuf to &str"),
-    );
+    )
+    .expect("Failed to read edge list");
     graph
 }
 

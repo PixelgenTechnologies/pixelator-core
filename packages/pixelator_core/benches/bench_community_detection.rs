@@ -125,7 +125,8 @@ fn bench_leiden_modularity_medium(bencher: Bencher) {
         parquet_path
             .to_str()
             .expect("Failed to convert PathBuf to &str"),
-    );
+    )
+    .expect("Failed to read edge list");
     let partitioning =
         LeidenNodePartitioning::initialize_with_singlet_partitions(graph.get_num_nodes());
     let quality = Modularity::new(0.1, graph.get_total_edge_weight());

@@ -8,8 +8,11 @@ use arrow::compute;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, UInt64Type};
 use itertools::Itertools;
 use log::info;
-use parquet::arrow::ArrowWriter;
-use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
+use parquet::arrow::arrow_reader::{
+    ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
+    ParquetRecordBatchReaderBuilder,
+};
+use parquet::arrow::{ArrowWriter, ProjectionMask};
 use parquet::file::properties::WriterProperties;
 
 use crate::common::graph::Graph;
@@ -17,8 +20,124 @@ use crate::common::node_indexing::UmiToNodeIndexMapping;
 use crate::common::node_partitioning::NodePartitioning;
 use crate::common::types::{EdgeWeight, NodeIdx, UMI, UMIPair};
 
+type IoError = Box<dyn std::error::Error + Send + Sync>;
+
+const UMI_COLUMNS: [&str; 2] = ["umi1", "umi2"];
+const READ_BATCH_SIZE: usize = 8192;
+
+/// Open an edge list and check that its `umi1` and `umi2` columns are plain `UInt64`
+/// columns without nulls.
+///
+/// Readers must be built from the returned file and metadata, so that they read the
+/// same file that was checked even if the path is replaced in the meantime.
+fn open_edgelist<P: AsRef<Path>>(path: P) -> Result<(File, ArrowReaderMetadata), IoError> {
+    let file = File::open(path)?;
+    let metadata = ArrowReaderMetadata::load(&file, ArrowReaderOptions::default())?;
+
+    let schema = metadata.schema();
+    let mut umi_roots = Vec::with_capacity(UMI_COLUMNS.len());
+    for name in UMI_COLUMNS {
+        let index = schema
+            .index_of(name)
+            .map_err(|_| format!("edge list has no {name} column"))?;
+        let data_type = schema.field(index).data_type();
+        if data_type != &DataType::UInt64 {
+            return Err(
+                format!("edge list column {name} has type {data_type}, expected UInt64").into(),
+            );
+        }
+        umi_roots.push(index);
+    }
+
+    if umi_columns_may_contain_nulls(&metadata)? {
+        let mask = ProjectionMask::roots(metadata.parquet_schema(), umi_roots);
+        let reader =
+            ParquetRecordBatchReaderBuilder::new_with_metadata(file.try_clone()?, metadata.clone())
+                .with_projection(mask)
+                .with_batch_size(READ_BATCH_SIZE)
+                .build()?;
+        for batch in reader {
+            umi_columns(&batch?)?;
+        }
+    }
+
+    Ok((file, metadata))
+}
+
+/// Use the parquet schema and column chunk statistics to rule out nulls in the UMI
+/// columns without reading them. Returns `true` when that is not possible.
+fn umi_columns_may_contain_nulls(metadata: &ArrowReaderMetadata) -> Result<bool, IoError> {
+    let parquet_metadata = metadata.metadata();
+    let leaves = parquet_metadata
+        .file_metadata()
+        .schema_descr()
+        .columns()
+        .iter()
+        .enumerate()
+        .filter_map(|(leaf, column)| {
+            let parts = column.path().parts();
+            UMI_COLUMNS
+                .iter()
+                .find(|name| parts.len() == 1 && parts[0] == **name)
+                .map(|name| (leaf, *name, column.max_def_level()))
+        })
+        .collect::<Vec<_>>();
+    if leaves.len() < UMI_COLUMNS.len() {
+        return Ok(true);
+    }
+
+    let mut may_contain_nulls = false;
+    for (leaf, name, max_def_level) in leaves {
+        if max_def_level == 0 {
+            continue;
+        }
+        for row_group in parquet_metadata.row_groups() {
+            match row_group
+                .column(leaf)
+                .statistics()
+                .and_then(|stats| stats.null_count_opt())
+            {
+                Some(0) => {}
+                Some(_) => {
+                    return Err(format!("edge list column {name} contains null values").into());
+                }
+                None => may_contain_nulls = true,
+            }
+        }
+    }
+    Ok(may_contain_nulls)
+}
+
+/// Get the `umi1` and `umi2` columns of a batch, failing if either is missing, is not
+/// `UInt64`, or contains nulls.
+fn umi_columns(batch: &RecordBatch) -> Result<(UInt64Array, UInt64Array), IoError> {
+    let column = |name: &str| -> Result<UInt64Array, IoError> {
+        let column = batch
+            .column_by_name(name)
+            .ok_or_else(|| format!("edge list has no {name} column"))?;
+        let column = column
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| {
+                format!(
+                    "edge list column {name} has type {}, expected UInt64",
+                    column.data_type()
+                )
+            })?;
+        if column.null_count() > 0 {
+            return Err(format!("edge list column {name} contains null values").into());
+        }
+        Ok(column.clone())
+    };
+    Ok((column(UMI_COLUMNS[0])?, column(UMI_COLUMNS[1])?))
+}
+
 /// An iterator that yields UMI pairs from a parquet file one by one.
 /// These can be mapped to node indices and used to construct a graph.
+///
+/// [`ParquetUMIPairIter::new`] rejects files whose UMI columns are missing, are not
+/// `UInt64`, or contain nulls. If a batch still fails to read, iteration stops early and
+/// the error is available from [`ParquetUMIPairIter::take_error`].
 pub struct ParquetUMIPairIter {
     reader: ParquetRecordBatchReader,
 
@@ -32,15 +151,18 @@ pub struct ParquetUMIPairIter {
     // Pointers for iteration logic
     current_idx: usize,
     batch_len: usize,
+
+    finished: bool,
+    error: Option<IoError>,
 }
 
 impl ParquetUMIPairIter {
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let file = File::open(path)?;
-
-        let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
-        let num_rows = builder.metadata().file_metadata().num_rows();
-        let reader = builder.with_batch_size(8192).build()?;
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, IoError> {
+        let (file, metadata) = open_edgelist(path)?;
+        let num_rows = metadata.metadata().file_metadata().num_rows();
+        let reader = ParquetRecordBatchReaderBuilder::new_with_metadata(file, metadata)
+            .with_batch_size(READ_BATCH_SIZE)
+            .build()?;
 
         Ok(Self {
             reader,
@@ -49,34 +171,41 @@ impl ParquetUMIPairIter {
             col_dst: None,
             current_idx: 0,
             batch_len: 0,
+            finished: false,
+            error: None,
         })
     }
 
+    /// Take the error that ended iteration early, if any.
+    pub fn take_error(&mut self) -> Option<IoError> {
+        self.error.take()
+    }
+
     fn load_next_batch(&mut self) -> bool {
-        match self.reader.next() {
-            Some(Ok(batch)) => {
-                let src_array = batch
-                    .column_by_name("umi1")
-                    .expect("Could not find umi1 column in data")
-                    .as_any()
-                    .downcast_ref::<PrimitiveArray<UInt64Type>>()
-                    .expect("Column umi1 is not UInt64");
+        let loaded = match self.reader.next() {
+            Some(batch) => batch
+                .map_err(IoError::from)
+                .and_then(|batch| Ok((umi_columns(&batch)?, batch.num_rows()))),
+            None => {
+                self.finished = true;
+                return false;
+            }
+        };
 
-                let dst_array = batch
-                    .column_by_name("umi2")
-                    .expect("Could not find umi2 column in data")
-                    .as_any()
-                    .downcast_ref::<PrimitiveArray<UInt64Type>>()
-                    .expect("Column umi2 is not UInt64");
+        match loaded {
+            Ok(((src_array, dst_array), num_rows)) => {
+                self.col_src = Some(src_array);
+                self.col_dst = Some(dst_array);
 
-                self.col_src = Some(src_array.clone());
-                self.col_dst = Some(dst_array.clone());
-
-                self.batch_len = batch.num_rows();
+                self.batch_len = num_rows;
                 self.current_idx = 0;
                 true
             }
-            _ => false, // End of file or error
+            Err(error) => {
+                self.finished = true;
+                self.error = Some(error);
+                false
+            }
         }
     }
 }
@@ -85,9 +214,11 @@ impl Iterator for ParquetUMIPairIter {
     type Item = UMIPair;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // If we are at the end of the current batch, load the next one
-        if self.current_idx >= self.batch_len && !self.load_next_batch() {
-            return None; // No more batches
+        // If we are at the end of the current batch, load the next non-empty one
+        while self.current_idx >= self.batch_len {
+            if self.finished || !self.load_next_batch() {
+                return None; // No more batches
+            }
         }
 
         let src = self.col_src.as_ref()?.value(self.current_idx);
@@ -143,62 +274,65 @@ pub fn filter_out_crossing_edges_from_edge_list<PIn: AsRef<Path>, POut: AsRef<Pa
     output_path: &POut,
     node_partitioning: &T,
     mapping: &UmiToNodeIndexMapping,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+) -> Result<(), IoError>
 where
     T: NodePartitioning,
 {
-    let file = File::open(input_edgelist_path)?;
-    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
-    let mut fields = builder
+    let (file, metadata) = open_edgelist(input_edgelist_path)?;
+    let mut fields = metadata
         .schema()
         .fields()
         .iter()
         .cloned()
         .collect::<Vec<Arc<Field>>>();
-    let mut reader = builder.with_batch_size(8192).build()?;
+    let reader = ParquetRecordBatchReaderBuilder::new_with_metadata(file, metadata)
+        .with_batch_size(READ_BATCH_SIZE)
+        .build()?;
 
     let output_file = File::create(output_path)?;
     fields.push(Arc::new(Field::new("component", DataType::Utf8, true)));
     let new_schema = Arc::new(Schema::new(fields));
+
+    let result =
+        write_edges_within_partitions(reader, output_file, new_schema, node_partitioning, mapping);
+    if result.is_err() {
+        let _ = std::fs::remove_file(output_path);
+    }
+    result
+}
+
+fn write_edges_within_partitions<T>(
+    reader: ParquetRecordBatchReader,
+    output_file: File,
+    new_schema: SchemaRef,
+    node_partitioning: &T,
+    mapping: &UmiToNodeIndexMapping,
+) -> Result<(), IoError>
+where
+    T: NodePartitioning,
+{
     let mut writer = ArrowWriter::try_new(output_file, new_schema.clone(), None)?;
+    let node_to_partition = node_partitioning.get_node_to_partition_map();
+    let partition_of = |umi: u64| -> Result<_, IoError> {
+        mapping
+            .get_node_index(umi as UMI)
+            .and_then(|node| node_to_partition.get(node))
+            .ok_or_else(|| format!("umi {umi} not found in umi mapping").into())
+    };
 
-    while let Some(Ok(batch)) = reader.next() {
-        let component1_iter = batch
-            .column_by_name("umi1")
-            .expect("Could not find umi1 column in data")
-            .as_any()
-            .downcast_ref::<PrimitiveArray<UInt64Type>>()
-            .expect("Column umi1 is not UInt64")
+    for batch in reader {
+        let batch = batch?;
+        let (umi1, umi2) = umi_columns(&batch)?;
+
+        let component_col = umi1
+            .values()
             .iter()
-            .map(|umi| {
-                let umi = umi.expect("umi1 column contains null values");
-                node_partitioning
-                    .get_node_to_partition_map()
-                    .get(mapping.map_umi_to_node_index(umi as UMI))
-                    .unwrap_or_else(|| panic!("umi {} not found in umi mapping", umi))
-            });
-
-        let component2_iter = batch
-            .column_by_name("umi2")
-            .expect("Could not find umi2 column in data")
-            .as_any()
-            .downcast_ref::<PrimitiveArray<UInt64Type>>()
-            .expect("Column umi2 is not UInt64")
-            .iter()
-            .map(|umi| {
-                let umi = umi.expect("umi2 column contains null values");
-                node_partitioning
-                    .get_node_to_partition_map()
-                    .get(mapping.map_umi_to_node_index(umi as UMI))
-                    .unwrap_or_else(|| panic!("umi {} not found in umi mapping", umi))
-            });
-
-        let component_col = StringArray::from(
-            component1_iter
-                .zip(component2_iter)
-                .map(|(c1, c2)| if c1 == c2 { Some(c1.to_string()) } else { None })
-                .collect::<Vec<Option<String>>>(),
-        );
+            .zip(umi2.values().iter())
+            .map(|(&umi1, &umi2)| {
+                let (c1, c2) = (partition_of(umi1)?, partition_of(umi2)?);
+                Ok(if c1 == c2 { Some(c1.to_string()) } else { None })
+            })
+            .collect::<Result<StringArray, IoError>>()?;
 
         let mask: BooleanArray = component_col.iter().map(|c| c.is_some()).collect();
         let mut columns = batch.columns().to_vec();
@@ -261,16 +395,17 @@ where
 
 pub fn create_graph_and_umi_mapping_from_parquet_file<T>(
     parquet_file: &str,
-) -> (UmiToNodeIndexMapping, Graph<T>)
+) -> Result<(UmiToNodeIndexMapping, Graph<T>), IoError>
 where
     T: EdgeWeight,
 {
     info!("Creating UMI mapping and graph edges...");
-    let pairs = ParquetUMIPairIter::new(parquet_file).expect("Failed to create ParquetUMIPairIter");
+    let mut pairs = ParquetUMIPairIter::new(parquet_file)?;
     // Mean degree about 3, so the node count is near 2E/3.
     let num_pairs = pairs.size_hint().0;
     let mut umi_mapping = UmiToNodeIndexMapping::with_capacity(num_pairs.saturating_mul(2) / 3);
     let triplets: Vec<(NodeIdx, NodeIdx, T)> = pairs
+        .by_ref()
         .map(|(src, dest)| {
             let (src, dest) = (
                 umi_mapping.get_or_insert(src),
@@ -279,6 +414,9 @@ where
             (src.min(dest), src.max(dest), T::one())
         })
         .collect();
+    if let Some(error) = pairs.take_error() {
+        return Err(error);
+    }
 
     let num_nodes = umi_mapping.get_num_of_nodes();
     info!("Creating graph...");
@@ -289,7 +427,7 @@ where
         graph.get_edge_entry_count(),
         graph.get_total_edge_weight()
     );
-    (umi_mapping, graph)
+    Ok((umi_mapping, graph))
 }
 
 #[cfg(test)]
@@ -310,7 +448,8 @@ mod tests {
             test_data
                 .to_str()
                 .expect("File name is not a valid UTF-8 string"),
-        );
+        )
+        .expect("Failed to read edge list");
         // Make up partitions based on the mod 4 parity of umis
         let partitioning = FastNodePartitioning::initialize_from_partitions(
             (0..graph.get_num_nodes())

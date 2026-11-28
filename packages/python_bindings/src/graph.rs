@@ -92,7 +92,7 @@ pub fn find_graph_statistics(
     parquet_file: &str,
 ) -> PyResult<(usize, usize, usize, f64)> {
     detach_io(py, || {
-        let (_, graph) = create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
+        let (_, graph) = create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file)?;
         let graph_properties = GraphProperties::new(&graph);
 
         Ok((
@@ -198,7 +198,7 @@ pub fn run_hybrid_community_detection(
 )> {
     detach_io(py, || {
         let (umi_mapping, graph) =
-            create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
+            create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file)?;
         checkpoint();
         let quality_function = Modularity::new(resolution, graph.get_total_edge_weight());
 
@@ -260,7 +260,7 @@ pub fn run_connected_components(
 ) -> PyResult<usize> {
     detach_io(py, || {
         let (umi_mapping, graph) =
-            create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
+            create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file)?;
 
         let node_to_component = graph.connected_components();
         let node_partition = FastNodePartitioning::initialize_from_partitions(node_to_component);
@@ -295,7 +295,7 @@ pub fn run_label_propagation(
 ) -> PyResult<usize> {
     detach_io(py, || {
         let (umi_mapping, graph) =
-            create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file);
+            create_graph_and_umi_mapping_from_parquet_file::<u8>(parquet_file)?;
         checkpoint();
 
         let node_partition =
@@ -378,7 +378,7 @@ pub fn run_leiden(
 
     detach_io(py, || {
         let (umi_mapping, graph) =
-            create_graph_and_umi_mapping_from_parquet_file::<usize>(parquet_file);
+            create_graph_and_umi_mapping_from_parquet_file::<usize>(parquet_file)?;
         checkpoint();
 
         let partition = if let Some(node_partition_map) = partition {

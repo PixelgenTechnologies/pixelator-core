@@ -35,7 +35,8 @@ fn mem_fast_label_propagation(bencher: Bencher) {
     let path = parquet_path("mix_40cells_0pc.parquet");
     let (_umi_mapping, graph) = create_graph_and_umi_mapping_from_parquet_file::<u8>(
         path.to_str().expect("Failed to convert PathBuf to &str"),
-    );
+    )
+    .expect("Failed to read edge list");
     drop(_umi_mapping);
     let partitioning =
         FastNodePartitioning::initialize_with_singlet_partitions(graph.get_num_nodes());
@@ -55,7 +56,8 @@ fn mem_leiden_modularity(bencher: Bencher) {
     let path = parquet_path("mix_40cells_1pc.parquet");
     let (_umi_mapping, graph) = create_graph_and_umi_mapping_from_parquet_file::<usize>(
         path.to_str().expect("Failed to convert PathBuf to &str"),
-    );
+    )
+    .expect("Failed to read edge list");
     drop(_umi_mapping);
     let partitioning =
         LeidenNodePartitioning::initialize_with_singlet_partitions(graph.get_num_nodes());

@@ -29,7 +29,8 @@ struct Dataset {
 fn dataset() -> &'static Dataset {
     static DATASET: OnceLock<Dataset> = OnceLock::new();
     DATASET.get_or_init(|| {
-        let (mapping, graph) = create_graph_and_umi_mapping_from_parquet_file::<u8>(PATH);
+        let (mapping, graph) = create_graph_and_umi_mapping_from_parquet_file::<u8>(PATH)
+            .expect("Failed to read edge list");
         Dataset { graph, mapping }
     })
 }
